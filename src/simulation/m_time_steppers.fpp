@@ -49,6 +49,9 @@ module m_time_steppers
     logical, private                              :: mass_flux_target_set  !< .true. once mean_mass_flux_target is captured
     logical, private                              :: T_target_set  !< .true. once mean_T_target is captured
     logical, private                              :: rho_target_set  !< .true. once mean_rho_target is captured
+    !> per-step controller record: s_rho-1, mass-flux shift, s_T-1, sum rho, sum rho*u, gas cells
+    real(wp), private, dimension(6) :: ctrl_log
+    integer, private                :: ctrl_unit  !< mean_ctrl.dat unit (rank 0)
 
     $:GPU_DECLARE(create='[q_cons_ts, q_prim_vf, q_T_sf, rhs_vf, q_prim_ts1, q_prim_ts2, rhs_mv, rhs_pb, rk_coef, stor, bc_type]')
 
@@ -81,6 +84,15 @@ contains
         T_target_set = .false.
         rho_target_set = .false.
         mass_flux_target_set = .false.
+        ctrl_log = 0._wp
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) then
+            if (n_start == 0) then
+                open (newunit=ctrl_unit, file=trim(case_dir) // '/mean_ctrl.dat', status='replace')
+                write (ctrl_unit, '(A)') '# t_step  time  dt  s_rho-1  mass_flux_shift  s_T-1  sum_rho_gas  sum_rhou_gas  n_gas'
+            else
+                open (newunit=ctrl_unit, file=trim(case_dir) // '/mean_ctrl.dat', status='old', position='append')
+            end if
+        end if
 
         if (time_stepper == time_stepper_rk1) then
             num_ts = 1
@@ -610,6 +622,9 @@ contains
         if (const_mean_rho) call s_hold_mean_density(q_cons_ts(1)%vf)
         if (const_mass_flux) call s_hold_mean_mass_flux(q_cons_ts(1)%vf)
         if (const_mean_T) call s_hold_mean_temperature(q_cons_ts(1)%vf)
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) then
+            write (ctrl_unit, '(I0, 8(1X, ES16.9))') t_step, mytime, dt, ctrl_log
+        end if
 
         call nvtxEndRange
         call cpu_time(finish)
@@ -671,6 +686,7 @@ contains
             ! reference; Cantera thermodynamics put e < 0 near 293 K, which makes the
             ! proportional form below ill-posed.
             shift = gammas(1)*(mean_T_target - T_glb/n_glb)
+            ctrl_log(3) = shift
 
             $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l]', copyin='[shift]')
             do l = 0, p
@@ -690,6 +706,7 @@ contains
             ! most and no cell can be driven through zero temperature (the uniform-increment
             ! form cools every cell by the same dT and leaves cold pockets at ~10 K).
             shift = mean_T_target/(T_glb/n_glb)
+            ctrl_log(3) = shift - 1._wp
 
             $:GPU_PARALLEL_LOOP(collapse=3, private='[i, j, k, l, rho, dyn_p]', copyin='[shift]')
             do l = 0, p
@@ -718,17 +735,18 @@ contains
     impure subroutine s_hold_mean_density(q_cons_vf)
 
         type(scalar_field), dimension(sys_size), intent(inout) :: q_cons_vf
-        real(wp)                                               :: r_loc, n_loc, r_glb, n_glb, shift
+        real(wp)                                               :: r_loc, n_loc, m_loc, r_glb, n_glb, m_glb, shift
         integer                                                :: i, j, k, l
 
-        r_loc = 0._wp; n_loc = 0._wp
+        r_loc = 0._wp; n_loc = 0._wp; m_loc = 0._wp
 
-        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l]', reduction='[[r_loc, n_loc]]', reductionOp='[+]')
+        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l]', reduction='[[r_loc, n_loc, m_loc]]', reductionOp='[+]')
         do l = 0, p
             do k = 0, n
                 do j = 0, m
                     if (ib_markers%sf(j, k, l) == 0) then
                         r_loc = r_loc + q_cons_vf(eqn_idx%cont%beg)%sf(j, k, l)
+                        m_loc = m_loc + q_cons_vf(eqn_idx%mom%beg)%sf(j, k, l)
                         n_loc = n_loc + 1._wp
                     end if
                 end do
@@ -738,6 +756,8 @@ contains
 
         call s_mpi_allreduce_sum(r_loc, r_glb)
         call s_mpi_allreduce_sum(n_loc, n_glb)
+        call s_mpi_allreduce_sum(m_loc, m_glb)
+        ctrl_log(4:6) = [r_glb, m_glb, n_glb]
 
         ! The first call defines the value that every later step is pulled back to
         if (.not. rho_target_set) then
@@ -752,6 +772,7 @@ contains
         ! and, with the ghost-cell wall flux of a bed (~25 %/flow-through), cools the gas
         ! by tens of percent and drives low-density cells to zero temperature.
         shift = mean_rho_target/(r_glb/n_glb)
+        ctrl_log(1) = shift - 1._wp
 
         $:GPU_PARALLEL_LOOP(collapse=3, private='[i, j, k, l]', copyin='[shift]')
         do l = 0, p
@@ -806,6 +827,7 @@ contains
         end if
 
         shift = mean_mass_flux_target - f_glb/n_glb
+        ctrl_log(2) = shift
 
         $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, rho, mom]', copyin='[shift]')
         do l = 0, p
@@ -1124,6 +1146,7 @@ contains
         use hipfort_check
 #endif
         integer :: i, j  !< Generic loop iterators
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) close (ctrl_unit)
         ! Deallocating the cell-average conservative variables
 #if defined(__NVCOMPILER_GPU_UNIFIED_MEM)
         do j = 1, sys_size
