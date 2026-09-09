@@ -45,7 +45,7 @@ export HSA_XNACK=0
     % else:
         (set -x; flux run \
             --nodes=${nodes} --ntasks=${tasks_per_node * nodes} \
-            -o spindle.level=off --exclusive \
+            -o spindle.level=off ${'--exclusive' if engine == 'batch' else ''} \
             % if gpu_enabled:
                 --gpus-per-task 1 \
             % endif
