@@ -905,17 +905,15 @@ contains
                 call s_initialize_ib_airfoils()
                 call s_get_neighbor_bounds()
 
+                ! Restart restores the namelist patches from the IB state file; the particle clouds
+                ! are regenerated from their seed (deterministic), so stationary beds come back
+                ! identical. Moving clouds restart at their generated positions.
                 if (cfl_dt .and. n_start > 0) then
                     call s_read_ib_restart_data(n_start)
-                    allocate (particle_cloud_ibs(0))
-                    num_particle_cloud_ibs = 0
                 else if (t_step_start > 0) then
                     call s_read_ib_restart_data(t_step_start)
-                    allocate (particle_cloud_ibs(0))
-                    num_particle_cloud_ibs = 0
-                else
-                    call s_generate_particle_clouds(particle_cloud_ibs, num_particle_cloud_ibs)
                 end if
+                call s_generate_particle_clouds(particle_cloud_ibs, num_particle_cloud_ibs)
                 call s_reduce_ib_patch_array(particle_cloud_ibs, num_particle_cloud_ibs)
                 deallocate (particle_cloud_ibs)
             end block
