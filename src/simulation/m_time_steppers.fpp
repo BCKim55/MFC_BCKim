@@ -624,6 +624,7 @@ contains
         if (const_mean_T) call s_hold_mean_temperature(q_cons_ts(1)%vf)
         if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) then
             write (ctrl_unit, '(I0, 8(1X, ES16.9))') t_step, mytime, dt, ctrl_log
+            flush (ctrl_unit)
         end if
 
         call nvtxEndRange
