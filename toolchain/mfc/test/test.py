@@ -741,11 +741,13 @@ def _handle_case(case: TestCase, devices: typing.Set[int]):
             out_filepath = os.path.join(case.get_dirpath(), "out_post.txt")
             common.file_write(out_filepath, cmd.stdout)
 
-            silo_dir = os.path.join(case.get_dirpath(), "silo_hdf5", "p0")
-            if os.path.isdir(silo_dir):
-                for silo_filename in os.listdir(silo_dir):
-                    silo_filepath = os.path.join(silo_dir, silo_filename)
-                    _process_silo_file(silo_filepath, case, out_filepath)
+            # silo_hdf5_lso holds the LSO-filtered fields when lso_pp_filter is enabled
+            for silo_dirname in ["silo_hdf5", "silo_hdf5_lso"]:
+                silo_dir = os.path.join(case.get_dirpath(), silo_dirname, "p0")
+                if os.path.isdir(silo_dir):
+                    for silo_filename in os.listdir(silo_dir):
+                        silo_filepath = os.path.join(silo_dir, silo_filename)
+                        _process_silo_file(silo_filepath, case, out_filepath)
 
         case.delete_output()
 

@@ -3974,6 +3974,41 @@ def list_cases() -> typing.List[TestCaseBuilder]:
 
     kernel_golden_tests()
 
+    def lso_pp_filter_tests():
+        """post_process LSO Gaussian filter on the 2D base case: plain cascade, and the
+        IB-aware mask-normalized filter. The simulation output (and therefore the golden
+        file) is unchanged; the filter runs in post_process, whose silo_hdf5_lso output
+        is NaN/Inf-checked under --test-all."""
+        dim2d = next(params for (dimInfo, params) in get_dimensions() if dimInfo[0] == ["x", "y"])
+        stack.push("2D", dim2d)
+        stack.push("LSO PP Filter", {"lso_pp_filter": "T", "lso_filter_sigma_target": 0.06})
+        cases.append(define_case_d(stack, "", {}))
+        cases.append(
+            define_case_d(
+                stack,
+                "IBM Circle",
+                {
+                    "n": 49,
+                    "ib": "T",
+                    "num_ibs": 1,
+                    "fd_order": 1,
+                    "patch_ib(1)%geometry": 2,
+                    "patch_ib(1)%x_centroid": 0.5,
+                    "patch_ib(1)%y_centroid": 0.5,
+                    "patch_ib(1)%radius": 0.1,
+                    "patch_ib(1)%slip": "F",
+                    "patch_icpp(1)%vel(1)": 0.001,
+                    "patch_icpp(2)%vel(1)": 0.001,
+                    "patch_icpp(3)%vel(1)": 0.001,
+                    "lso_filter_sigma_target": 0.1,
+                },
+            )
+        )
+        stack.pop()
+        stack.pop()
+
+    lso_pp_filter_tests()
+
     add_convergence_cases(cases)
 
     # Sanity Check 1
