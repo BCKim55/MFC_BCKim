@@ -89,7 +89,18 @@ module m_global_parameters
 
     ! Cell indices (InDices With BUFFer): includes buffer in simulation only
     type(int_bounds_info) :: idwbuff(1:3)
-    logical               :: bc_io
+
+    !> @name LSO post_process filter: per-pass 9-point stencil coefficients per direction, derived by the toolchain
+    !! (mfc/lso_filter.py) and read from post_process.inp. lso_pp_filter, lso_filter_sigma_target, lso_pp_n_passes_*: auto-generated
+    !! in generated_decls.fpp
+    !> @{
+    integer, parameter :: lso_max_passes = 60  !< Max filter passes; must match LSO_MAX_PASSES in mfc/lso_filter.py
+    real(wp)           :: lso_pp_a_x(5, lso_max_passes)
+    real(wp)           :: lso_pp_a_y(5, lso_max_passes)
+    real(wp)           :: lso_pp_a_z(5, lso_max_passes)
+    !> @}
+
+    logical :: bc_io
     !> @name Boundary conditions in the x-, y- and z-coordinate directions
     !> @{
     type(int_bounds_info) :: bc_x, bc_y, bc_z
@@ -192,6 +203,16 @@ contains
 
         bc_io = .false.
         num_bc_patches = dflt_int
+
+        ! LSO post_process filter
+        lso_pp_filter = .false.
+        lso_filter_sigma_target = dflt_real
+        lso_pp_n_passes_x = 0
+        lso_pp_n_passes_y = 0
+        lso_pp_n_passes_z = 0
+        lso_pp_a_x = 0._wp
+        lso_pp_a_y = 0._wp
+        lso_pp_a_z = 0._wp
 
         chem_params%gamma_method = 1
         chem_params%transport_model = 1
@@ -498,6 +519,9 @@ contains
             fd_number = max(1, fd_order/2)
             buff_size = buff_size + fd_number
         end if
+
+        ! The LSO filter's 9-point stencil reads 4 ghost cells per side
+        if (lso_pp_filter) buff_size = max(buff_size, 4)
 
         ! Configuring Coordinate Direction Indexes
         idwint(1)%beg = 0; idwint(2)%beg = 0; idwint(3)%beg = 0

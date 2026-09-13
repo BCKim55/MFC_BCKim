@@ -28,6 +28,7 @@ module m_start_up
     use m_finite_differences
     use m_constants, only: model_eqns_gamma_law, model_eqns_5eq, model_eqns_6eq, format_silo
     use m_chemistry
+    use m_lso_pp_filter, only: s_initialize_lso_pp_filter_module, s_finalize_lso_pp_filter_module
 
 #ifdef MFC_MPI
     use mpi
@@ -175,6 +176,20 @@ contains
         call s_convert_conservative_to_primitive_variables(q_cons_vf, q_T_sf, q_prim_vf, idwbuff)
 
     end subroutine s_perform_time_step
+
+    !> Rebuild the primitive state from q_cons_vf after the LSO filter has modified it in place: refresh ghost cells and reconvert,
+    !! exactly as s_perform_time_step does for the freshly read data.
+    impure subroutine s_reconvert_filtered_to_primitive()
+
+        if (chemistry) call s_compute_q_T_sf(q_T_sf, q_cons_vf, idwint)
+
+        if (buff_size > 0) then
+            call s_populate_variables_buffers(bc_type, q_cons_vf, q_T_sf=q_T_sf)
+        end if
+
+        call s_convert_conservative_to_primitive_variables(q_cons_vf, q_T_sf, q_prim_vf, idwbuff)
+
+    end subroutine s_reconvert_filtered_to_primitive
 
     !> Derive requested flow quantities from primitive variables and write them to the formatted database files.
     impure subroutine s_save_data(t_step, varname, pres, c)
@@ -794,6 +809,7 @@ contains
         call s_initialize_boundary_common_module()
         call s_initialize_variables_conversion_module(store_mixture_fields=.true., lagrange_beta_index=beta_idx)
         call s_initialize_data_input_module()
+        if (lso_pp_filter) call s_initialize_lso_pp_filter_module()
         call s_initialize_derived_variables_module()
         call s_initialize_data_output_module()
 
@@ -992,6 +1008,7 @@ contains
         end if
 #endif
 
+        if (lso_pp_filter) call s_finalize_lso_pp_filter_module()
         call s_finalize_data_output_module()
         call s_finalize_derived_variables_module()
         call s_finalize_data_input_module()

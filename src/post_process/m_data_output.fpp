@@ -119,7 +119,12 @@ contains
         end if
 
         if (format == format_silo) then
-            out%dbdir = trim(case_dir) // '/silo_hdf5'
+            ! LSO-filtered fields go to silo_hdf5_lso/ so they never mix with unfiltered output
+            if (lso_pp_filter) then
+                out%dbdir = trim(case_dir) // '/silo_hdf5_lso'
+            else
+                out%dbdir = trim(case_dir) // '/silo_hdf5'
+            end if
 
             write (out%proc_rank_dir, '(A,I0)') '/p', proc_rank
 
@@ -143,7 +148,11 @@ contains
                 end if
             end if
         else
-            out%dbdir = trim(case_dir) // '/binary'
+            if (lso_pp_filter) then
+                out%dbdir = trim(case_dir) // '/binary_lso'
+            else
+                out%dbdir = trim(case_dir) // '/binary'
+            end if
 
             write (out%proc_rank_dir, '(A,I0)') '/p', proc_rank
 

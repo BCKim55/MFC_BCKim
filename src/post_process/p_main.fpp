@@ -7,6 +7,9 @@ program p_main
 
     use m_global_parameters
     use m_start_up
+    use m_derived_types, only: scalar_field
+    use m_data_input, only: q_cons_vf
+    use m_lso_pp_filter, only: s_apply_lso_pp_filter, s_apply_lso_pp_filter_masked, s_lso_pp_mask_from_ib
 
     implicit none
 
@@ -39,6 +42,25 @@ program p_main
         call cpu_time(start)
 
         call s_perform_time_step(t_step)
+
+        ! LSO filter: filter q_cons_vf in place (mask-normalized when immersed boundaries
+        ! are present), then rebuild the primitive state from the filtered fields.
+        if (lso_pp_filter) then
+            block
+                type(scalar_field) :: w_vf(1:1)
+
+                if (ib) then
+                    allocate (w_vf(1)%sf(lbound(q_cons_vf(1)%sf, 1):ubound(q_cons_vf(1)%sf, 1),lbound(q_cons_vf(1)%sf, &
+                              & 2):ubound(q_cons_vf(1)%sf, 2),lbound(q_cons_vf(1)%sf, 3):ubound(q_cons_vf(1)%sf, 3)))
+                    call s_lso_pp_mask_from_ib(w_vf)
+                    call s_apply_lso_pp_filter_masked(q_cons_vf, w_vf)
+                    deallocate (w_vf(1)%sf)
+                else
+                    call s_apply_lso_pp_filter(q_cons_vf)
+                end if
+            end block
+            call s_reconvert_filtered_to_primitive()
+        end if
 
         call s_save_data(t_step, varname, pres, c)
 

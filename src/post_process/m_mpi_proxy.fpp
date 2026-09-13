@@ -70,6 +70,11 @@ contains
         !            chem_wrt_Y, previously missing), fluid_pp loop, bub_pp guard
         #:include 'generated_bcast.fpp'
 
+        ! LSO filter coefficient arrays (5 coefficients x lso_max_passes passes per direction)
+        call MPI_BCAST(lso_pp_a_x(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+        call MPI_BCAST(lso_pp_a_y(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+        call MPI_BCAST(lso_pp_a_z(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+
         ! manual: m_glb, n_glb, p_glb (computed in s_read_input_file, not namelist-bound)
         call MPI_BCAST(m_glb, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
         call MPI_BCAST(n_glb, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)

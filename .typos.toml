@@ -7,6 +7,8 @@ extend-ignore-identifiers-re = [
 AttributeIDSupressMenu = "AttributeIDSupressMenu"
 
 [default.extend-words]
+lso = "lso"
+LSO = "LSO"
 INOUT = "INOUT"
 WRONLY = "WRONLY"
 nd = "nd"

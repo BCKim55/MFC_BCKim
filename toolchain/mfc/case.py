@@ -112,6 +112,11 @@ class Case:
         cons.print(f"[yellow]INFO:[/yellow] Forwarded {len(self.params) - len(ignored)}/{len(self.params)} parameters.")
         cons.unindent()
 
+        # The post_process LSO filter weights are derived data: computed here from
+        # lso_filter_sigma_target and the grid, and injected as lso_pp_* namelist lines.
+        if target.name == "post_process" and str(self.params.get("lso_pp_filter", "F")).upper() == "T":
+            dict_str += self.__get_lso_pp_lines()
+
         return f"&user_inputs\n{dict_str}&end/\n"
 
     def validate_params(self, origin_txt: str = None):
@@ -145,6 +150,51 @@ class Case:
             if origin_txt:
                 raise common.MFCException(f"{origin_txt}:\n{error_msg}")
             raise common.MFCException(f"Validation errors:\n{error_msg}")
+
+    def __get_grid_spacing(self):
+        """Return (d_p, dx, dy, dz) for a uniform grid; dy/dz are 0 for absent directions."""
+        p = self.params
+
+        d_p = 2.0 * float(p.get("patch_ib(1)%radius", 0.0))
+
+        m_cells = int(p.get("m", 0))
+        n_cells = int(p.get("n", 0))
+        p_cells = int(p.get("p", 0))
+
+        x_beg = float(p.get("x_domain%beg", 0.0))
+        x_end = float(p.get("x_domain%end", 1.0))
+        y_beg = float(p.get("y_domain%beg", 0.0))
+        y_end = float(p.get("y_domain%end", 1.0))
+        z_beg = float(p.get("z_domain%beg", 0.0))
+        z_end = float(p.get("z_domain%end", 1.0))
+
+        dx = (x_end - x_beg) / (m_cells + 1)
+        dy = (y_end - y_beg) / (n_cells + 1) if n_cells > 0 else 0.0
+        dz = (z_end - z_beg) / (p_cells + 1) if p_cells > 0 else 0.0
+        return d_p, dx, dy, dz
+
+    def __warn_lso_width(self, sigma: float, dx: float, dy: float, dz: float) -> None:
+        """Warn when a single cascade approaches the ~45-cell finite-precision stability limit."""
+        for tag, d in (("x", dx), ("y", dy), ("z", dz)):
+            if d > 0.0 and sigma / d > 40.0:
+                cons.print(f"[yellow]Warning:[/yellow] LSO: sigma = {sigma / d:.1f} cells in {tag} is near the ~45-cell stability limit of the 9-point cascade.")
+
+    def __get_lso_pp_lines(self) -> str:
+        """Compute the post_process LSO filter pass weights for lso_filter_sigma_target."""
+        from .lso_filter import compute_lso_params, lso_namelist_lines
+
+        p = self.params
+        d_p, dx, dy, dz = self.__get_grid_spacing()
+
+        sigma_target = float(p.get("lso_filter_sigma_target", 0.0))
+        if sigma_target <= 0.0:
+            raise common.MFCException("lso_pp_filter = T requires lso_filter_sigma_target (> 0), the Gaussian filter standard deviation in physical units.")
+
+        cons.print(f"[cyan]LSO filter (post_process):[/cyan] sigma_target={sigma_target:.4g}, computing weights...")
+        self.__warn_lso_width(sigma_target, dx, dy, dz)
+        lso_params = compute_lso_params(d_p, dx, dy, dz, sigma_target)
+
+        return lso_namelist_lines(lso_params, prefix="lso_pp_")
 
     def __get_ndims(self) -> int:
         return 1 + min(int(self.params.get("n", 0)), 1) + min(int(self.params.get("p", 0)), 1)

@@ -363,6 +363,7 @@ CONSTRAINTS = {
     "t_stop": {"min": 0},
     "t_save": {"min": 0},
     "t_step_save": {"min": 1},
+    "lso_filter_sigma_target": {"min": 0},
     "t_step_print": {"min": 1},
     "cfl_target": {"min": 0},
     "collision_temporal_resolution": {"min": 1},
@@ -533,6 +534,11 @@ DEPENDENCIES = {
             "requires": ["fd_order"],
         }
     },
+    "lso_pp_filter": {
+        "when_true": {
+            "requires": ["lso_filter_sigma_target"],
+        }
+    },
     "cfl_adap_dt": {
         "when_true": {
             "recommends": ["cfl_target"],
@@ -692,6 +698,16 @@ def _load():
     _r("format", INT, {"output"})
     for n in ["parallel_io", "file_per_process", "run_time_info", "prim_vars_wrt", "cons_vars_wrt", "fft_wrt", "ib_state_wrt"]:
         _r(n, LOG, {"output"})
+
+    # LSO (least-squares optimized) Gaussian filter applied by post_process.
+    # The lso_pp_n_passes_* / lso_pp_a_* pass design is derived by the toolchain
+    # (mfc/lso_filter.py) from lso_filter_sigma_target and injected into
+    # post_process.inp; users set only lso_pp_filter and lso_filter_sigma_target.
+    _r("lso_pp_filter", LOG, {"output"})
+    _r("lso_filter_sigma_target", REAL, {"output"})
+    for d in ["x", "y", "z"]:
+        _r(f"lso_pp_n_passes_{d}", INT, {"output"})
+        _r(f"lso_pp_a_{d}(1,1)", REAL, {"output"})
     for n in [
         "schlieren_wrt",
         "alpha_wrt",
@@ -1514,6 +1530,14 @@ _nv(
     "y_output",
     "z_output",
     "format",
+    "lso_pp_filter",
+    "lso_filter_sigma_target",
+    "lso_pp_n_passes_x",
+    "lso_pp_n_passes_y",
+    "lso_pp_n_passes_z",
+    "lso_pp_a_x",
+    "lso_pp_a_y",
+    "lso_pp_a_z",
     "output_partial_domain",
     "sim_data",
     "G",

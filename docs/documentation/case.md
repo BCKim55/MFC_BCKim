@@ -755,6 +755,10 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `fft_wrt`               | Logical | Enable FFT output |
 | `sim_data`              | Logical | Write interface and energy data files (post_process) |
 | `down_sample`           | Logical | Enable output downsampling |
+| `lso_pp_filter`          | Logical | Apply an LSO Gaussian filter to the conserved variables in the post-process stage |
+| `lso_filter_sigma_target` | Real   | Standard deviation of the target Gaussian filter kernel in physical units |
+| `lso_pp_n_passes_[x,y,z]` | Integer | Number of LSO filter passes per direction (derived by the toolchain; do not set) |
+| `lso_pp_a_[x,y,z]`       | Real    | Per-pass LSO stencil coefficients per direction (derived by the toolchain; do not set) |
 | `fd_order`              | Integer | Order of finite differences for computing the vorticity and the numerical Schlieren function [1,2,4] |
 | `schlieren_alpha(i)`    | Real    | Intensity of the numerical Schlieren computed via `alpha(i)` |
 | `probe_wrt`             | Logical | Write the flow chosen probes data files for each time step	|
@@ -809,6 +813,11 @@ If `file_per_process` is true, then pre_process, simulation, and post_process mu
 - `probe_wrt` activates the output of state variables at coordinates specified by `probe(i)%[x;y,z]`.
 
 - `ib_state_wrt` is used to trigger post-processing of the IB state to be written out as a point mesh in the SILO files. When no IBs are moving, it also triggers force and torque calculation so that those values may be written to the output state files.
+
+- `lso_pp_filter` applies a Gaussian low-pass filter of standard deviation `lso_filter_sigma_target` (in physical units) to the conserved variables in the post-process stage before the primitive state is rebuilt and written.
+The filter is a least-squares optimized (LSO) cascade of symmetric 9-point FIR passes whose composed transfer function matches the target Gaussian to a frequency-domain RMS error below \f$10^{-3}\f$; the per-direction pass counts (`lso_pp_n_passes_[x,y,z]`) and stencil weights (`lso_pp_a_[x,y,z]`) are derived automatically by the toolchain from the grid spacing and written into the input file — do not set them by hand (widths up to \f$\sigma \approx 45\f$ cells per direction are supported).
+The filtered fields are written to `silo_hdf5_lso/` (or `binary_lso/`), never mixing with unfiltered output.
+With immersed boundaries the filter is a mask-normalized convolution that excludes the solid interior, so the non-physical state inside IB patches does not contaminate the fluid average.
 
 - `output_partial_domain` activates the output of part of the domain specified by `[x,y,z]_output%%beg` and `[x,y,z]_output%%end`.
 This is useful for large domains where only a portion of the domain is of interest.
