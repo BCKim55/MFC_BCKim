@@ -1353,6 +1353,14 @@ contains
 
         if (proc_rank == 0) then
             nBodies = num_ibs
+            ! particle-cloud beds expand into patch_ib inside the simulation only (num_ibs = 0 here):
+            ! take the body count from the ib_state record size instead
+            if (nBodies == 0 .and. .not. file_per_process) then
+                write (file_loc, '(A,I0,A)') '/restart_data/ib_state_', t_step, '.dat'
+                file_loc = trim(case_dir) // trim(file_loc)
+                inquire (FILE=trim(file_loc), EXIST=file_exist, SIZE=ios)
+                if (file_exist) nBodies = ios/(NFIELDS_PER_IB*storage_size(ib_buf(1))/8)
+            end if
 
             if (nBodies > 0) then
                 allocate (ib_data(nBodies, NFIELDS_PER_IB))
