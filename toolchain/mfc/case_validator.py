@@ -1196,6 +1196,17 @@ class CaseValidator:
         if self.get("conduction", "F") == "T":
             self.prohibit(self.get("viscous", "F") != "T", "conduction requires viscous = T")
             self.prohibit((self.get("num_fluids", 1) or 1) != 1, "conduction requires num_fluids = 1")
+        if (self.get("mu_T_exp") or 0) > 0:
+            self.prohibit(self.get("viscous", "F") != "T", "mu_T_exp requires viscous = T")
+            self.prohibit((self.get("num_fluids", 1) or 1) != 1, "mu_T_exp requires num_fluids = 1")
+            self.prohibit((self.get("mu_T_ref") or 0) <= 0, "mu_T_exp requires mu_T_ref > 0 (reference temperature of the power law)")
+            self.prohibit((self.get("fluid_pp(1)%cv") or 0) <= 0, "mu_T_exp requires fluid_pp(1)%cv (T = p gamma_s/(rho cv))")
+        # isothermal immersed surfaces (single gas): p/rho = R*T needs R = cv/gamma_s and a conduction flux
+        tw = [self.get(f"patch_ib({i})%Twall") for i in range(1, (self.get("num_ibs", 0) or 0) + 1)]
+        tw += [self.get(f"particle_cloud({i})%Twall") for i in range(1, (self.get("num_particle_clouds", 0) or 0) + 1)]
+        if any(t is not None and t > 0 for t in tw) and self.get("chemistry", "F") != "T":
+            self.prohibit(self.get("conduction", "F") != "T", "an IB Twall without chemistry requires conduction = T")
+            self.prohibit((self.get("fluid_pp(1)%cv") or 0) <= 0, "an IB Twall without chemistry requires fluid_pp(1)%cv (R = cv*(gamma-1))")
         if self.get("Pr") is not None:
             self.prohibit(self.get("conduction", "F") != "T", "Pr requires conduction = T")
             self.prohibit(self.get("Pr") <= 0, "Pr must be positive")

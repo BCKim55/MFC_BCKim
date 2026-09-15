@@ -382,6 +382,7 @@ module m_derived_types
         integer  :: cloud_geometry  !< Cloud region geometry: 1=box, 2=hemisphere shell
         integer  :: packing_method  !< Packing algorithm: 1=rejection sampling, 2=lattice
         integer  :: periodic  !< Periodic overlap flag for box rejection packing: 0=off, 1=on
+        real(wp) :: Twall  !< Isothermal surface temperature of every particle; <= 0 = adiabatic
     end type particle_cloud_parameters
 
     !> Derived type annexing the physical parameters (PP) of the fluids. These include the specific heat ratio function and liquid

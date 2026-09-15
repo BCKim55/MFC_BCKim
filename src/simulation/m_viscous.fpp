@@ -49,7 +49,7 @@ module m_viscous
     use m_constants, only: model_eqns_5eq, recon_type_weno, recon_type_muscl
     use m_hb_function
 
-    private; public s_get_viscous, s_compute_viscous_stress_cylindrical_boundary, s_initialize_viscous_module, &
+    private; public s_get_viscous, s_compute_viscous_stress_cylindrical_boundary, s_initialize_viscous_module, f_mu_T, &
         & s_reconstruct_cell_boundary_values_visc_deriv, s_finalize_viscous_module, s_compute_viscous_stress_tensor, &
         & s_compute_heat_conduction
 
@@ -1273,8 +1273,8 @@ contains
                     ! x faces
                     th_p = q_prim_vf(eqn_idx%E)%sf(j + 1, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j + 1, k, l)
                     th_m = q_prim_vf(eqn_idx%E)%sf(j - 1, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j - 1, k, l)
-                    q_p = coef*(th_p - th_c)/(x_cc(j + 1) - x_cc(j))
-                    q_m = coef*(th_c - th_m)/(x_cc(j) - x_cc(j - 1))
+                    q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(x_cc(j + 1) - x_cc(j))
+                    q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(x_cc(j) - x_cc(j - 1))
                     if (ib) then
                         if (ib_markers%sf(j, k, l) /= 0) then
                             q_p = 0._wp; q_m = 0._wp
@@ -1287,8 +1287,8 @@ contains
                     if (n > 0) then
                         th_p = q_prim_vf(eqn_idx%E)%sf(j, k + 1, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k + 1, l)
                         th_m = q_prim_vf(eqn_idx%E)%sf(j, k - 1, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k - 1, l)
-                        q_p = coef*(th_p - th_c)/(y_cc(k + 1) - y_cc(k))
-                        q_m = coef*(th_c - th_m)/(y_cc(k) - y_cc(k - 1))
+                        q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(y_cc(k + 1) - y_cc(k))
+                        q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(y_cc(k) - y_cc(k - 1))
                         if (ib) then
                             if (ib_markers%sf(j, k, l) /= 0) then
                                 q_p = 0._wp; q_m = 0._wp
@@ -1302,8 +1302,8 @@ contains
                     if (p > 0) then
                         th_p = q_prim_vf(eqn_idx%E)%sf(j, k, l + 1)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l + 1)
                         th_m = q_prim_vf(eqn_idx%E)%sf(j, k, l - 1)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l - 1)
-                        q_p = coef*(th_p - th_c)/(z_cc(l + 1) - z_cc(l))
-                        q_m = coef*(th_c - th_m)/(z_cc(l) - z_cc(l - 1))
+                        q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(z_cc(l + 1) - z_cc(l))
+                        q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(z_cc(l) - z_cc(l - 1))
                         if (ib) then
                             if (ib_markers%sf(j, k, l) /= 0) then
                                 q_p = 0._wp; q_m = 0._wp
@@ -1358,7 +1358,7 @@ contains
 
         ! Non-Newtonian: per-sample mixture viscosity from the local strain rate, so each
         ! stencil cell (i,j,k) uses its own viscosity instead of a reused cell-center value.
-        mu_eff = dynamic_viscosity
+        mu_eff = dynamic_viscosity*f_mu_T(q_prim_vf(eqn_idx%E)%sf(i, j, k)/q_prim_vf(eqn_idx%cont%beg)%sf(i, j, k))
         if (any_non_newtonian) then
             gamma_dot_c = f_compute_shear_rate_from_components(velocity_gradient_tensor(1, 1), velocity_gradient_tensor(2, 2), &
                 & velocity_gradient_tensor(3, 3), 0.5_wp*(velocity_gradient_tensor(1, 2) + velocity_gradient_tensor(2, 1)), &
@@ -1408,5 +1408,16 @@ contains
         @:DEALLOCATE(Res_viscous)
 
     end subroutine s_finalize_viscous_module
+
+    !> Power-law viscosity factor mu/mu0 = (T/T_ref)^mu_T_exp from theta = p/rho (single perfect gas); 1 when off.
+    pure elemental function f_mu_T(theta) result(f)
+
+        $:GPU_ROUTINE(parallelism='[seq]')
+        real(wp), intent(in) :: theta
+        real(wp)             :: f
+        f = 1._wp
+        if (mu_T_scale > 0._wp) f = (mu_T_scale*theta)**mu_T_exp
+
+    end function f_mu_T
 
 end module m_viscous

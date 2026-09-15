@@ -814,6 +814,7 @@ contains
         if (conduction .and. .not. igr) then
             call nvtxStartRange("RHS-CONDUCTION")
             call s_compute_heat_conduction(q_prim_qp%vf, ib_markers, rhs_vf)
+            if (ib) call s_ibm_wall_heat_flux(q_prim_qp%vf, rhs_vf)
             call nvtxEndRange
         end if
 

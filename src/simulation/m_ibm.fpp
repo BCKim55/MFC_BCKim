@@ -27,8 +27,10 @@ module m_ibm
 
     private :: s_compute_image_points, s_compute_interpolation_coeffs, s_interpolate_image_point, s_find_ghost_points, &
         & s_find_num_ghost_points
-    ; public :: s_initialize_ibm_module, s_ibm_setup, s_ibm_correct_state, s_ibm_set_isothermal_T, s_finalize_ibm_module
+    ; public :: s_initialize_ibm_module, s_ibm_setup, s_ibm_correct_state, s_ibm_set_isothermal_T, s_ibm_wall_heat_flux, &
+        & s_finalize_ibm_module
 
+    real(wp), public            :: ib_wall_heat  !< Heat leaving the gas through isothermal IB surfaces [W], last RHS evaluation
     type(integer_field), public :: ib_markers
     $:GPU_DECLARE(create='[ib_markers]')
 
@@ -172,6 +174,7 @@ contains
         #:endif
         real(wp) :: T_IP, mw_IP, e_IP  !< Image-point temperature, mixture MW, and mass-specific internal energy (chemistry)
         real(wp) :: v_blow_eff         !< Effective surface blowing speed (after any pressure-coupled burn-rate scaling)
+        real(wp) :: th_w               !< R*Twall of an isothermal patch (p/rho at the wall)
         ! Primitive variables at the image point associated with a ghost point, interpolated from surrounding fluid cells.
 
         real(wp), dimension(3) :: norm               !< Normal vector from GP to IP
@@ -222,7 +225,7 @@ contains
             $:GPU_PARALLEL_LOOP(private='[i, physical_loc, dyn_pres, alpha_rho_IP, alpha_IP, pres_IP, vel_IP, vel_g, vel_norm_IP, &
                                 & r_IP, v_IP, pb_IP, mv_IP, nmom_IP, presb_IP, massv_IP, rho, gamma, pi_inf, Re_K, G_K, Gs, gp, &
                                 & innerp, norm, buf, radial_vector, rotation_velocity, j, k, l, q, qv_K, c_IP, nbub, patch_id, &
-                                & Ys_IP, T_IP, mw_IP, e_IP, v_blow_eff]')
+                                & Ys_IP, T_IP, mw_IP, e_IP, v_blow_eff, th_w]')
             do i = 1, num_gps
                 gp = ghost_points(i)
                 j = gp%loc(1)
@@ -264,6 +267,15 @@ contains
                     Ys_IP(patch_ib(patch_id)%inj_species) = 1._wp
                     call get_mixture_molecular_weight(Ys_IP, mw_IP)
                     alpha_rho_IP(1) = pres_IP*mw_IP/(T_IP*gas_constant)
+                end if
+
+                ! Isothermal surface, single perfect gas: reflect p/rho = R*T about R*Twall so the interface
+                ! sits at Twall (ghost and image point are equidistant from the surface), and rebuild the
+                ! ghost density from the mirrored pressure. The energy below is gamma*pres_IP + pi_inf, so
+                ! p = rho*R*T holds at the ghost cell. Floor as in s_ibm_set_isothermal_T.
+                if (.not. chemistry .and. patch_ib(patch_id)%Twall > 0._wp) then
+                    th_w = patch_ib(patch_id)%Twall*cvs(1)/gammas(1)
+                    alpha_rho_IP(1) = pres_IP/max(2._wp*th_w - pres_IP/alpha_rho_IP(1), 0.5_wp*th_w)
                 end if
 
                 dyn_pres = 0._wp
@@ -1575,6 +1587,64 @@ contains
     end subroutine s_update_ib_lookup
 
     !> Finalize the IBM module
+
+    !> Conduction flux across the faces between fluid cells and isothermal IB cells (single perfect gas). s_compute_heat_conduction
+    !! carries no flux over any fluid/IB face; this adds the missing face term for Twall patches, whose ghost p/rho is the
+    !! reflection about R*Twall (s_ibm_correct_state), and sums the heat leaving the gas through those faces into ib_wall_heat.
+    !! Loops over the fluid side so that IB cells in the MPI/periodic halo are seen.
+    subroutine s_ibm_wall_heat_flux(q_prim_vf, rhs_vf)
+
+        type(scalar_field), dimension(sys_size), intent(in)    :: q_prim_vf
+        type(scalar_field), dimension(sys_size), intent(inout) :: rhs_vf
+        real(wp)                                               :: coef, th_f, th_g, q_face, vol, width, dist, q_sum
+        integer                                                :: j, k, l, jn, kn, ln, d, s, gbl_id, patch_id
+
+        coef = fluid_inv_re(1)*(1._wp + gammas(1))/Pr
+        q_sum = 0._wp
+        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, jn, kn, ln, d, s, gbl_id, patch_id, th_f, th_g, q_face, vol, width, &
+                            & dist]', copyin='[coef]', reduction='[[q_sum]]', reductionOp='[+]')
+        do l = 0, p
+            do k = 0, n
+                do j = 0, m
+                    if (ib_markers%sf(j, k, l) == 0) then
+                        th_f = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
+                        vol = dx(j)
+                        if (n > 0) vol = vol*dy(k)
+                        if (p > 0) vol = vol*dz(l)
+                        $:GPU_LOOP(parallelism='[seq]')
+                        do d = 1, num_dims
+                            $:GPU_LOOP(parallelism='[seq]')
+                            do s = -1, 1, 2
+                                jn = j; kn = k; ln = l
+                                if (d == 1) then
+                                    jn = j + s; dist = abs(x_cc(jn) - x_cc(j)); width = dx(j)
+                                else if (d == 2) then
+                                    kn = k + s; dist = abs(y_cc(kn) - y_cc(k)); width = dy(k)
+                                else
+                                    ln = l + s; dist = abs(z_cc(ln) - z_cc(l)); width = dz(l)
+                                end if
+                                if (ib_markers%sf(jn, kn, ln) /= 0) then
+                                    call s_decode_patch_periodicity(ib_markers%sf(jn, kn, ln), gbl_id)
+                                    call s_get_neighborhood_idx(gbl_id, patch_id)
+                                    if (patch_id > 0) then
+                                        if (patch_ib(patch_id)%Twall > 0._wp) then
+                                            th_g = q_prim_vf(eqn_idx%E)%sf(jn, kn, ln)/q_prim_vf(eqn_idx%cont%beg)%sf(jn, kn, ln)
+                                            q_face = coef*f_mu_T(0.5_wp*(th_g + th_f))*(th_g - th_f)/dist  ! flux into the fluid cell
+                                            rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + q_face/width
+                                            q_sum = q_sum - q_face*vol/width
+                                        end if
+                                    end if
+                                end if
+                            end do
+                        end do
+                    end if
+                end do
+            end do
+        end do
+        $:END_GPU_PARALLEL_LOOP()
+        ib_wall_heat = q_sum
+
+    end subroutine s_ibm_wall_heat_flux
 
     !> Impose the isothermal-surface temperature of isothermal IB patches on the ghost-point entries of the temperature field. The
     !! chemistry diffusion flux reads q_T_sf directly, so reflecting the mirrored ghost temperature about Twall makes the interface

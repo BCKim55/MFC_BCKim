@@ -164,14 +164,16 @@ module m_global_parameters
 
     !> @name Herschel-Bulkley non-Newtonian viscosity: per-fluid flags and parameter arrays.
     !> @{
-    logical                             :: any_non_newtonian  !< .true. if any fluid is non-Newtonian
-    logical, allocatable, dimension(:)  :: is_non_newtonian   !< per-fluid NN flag
+    logical :: any_non_newtonian  !< .true. if any fluid is non-Newtonian
+    logical, allocatable, dimension(:) :: is_non_newtonian  !< per-fluid NN flag
     real(wp), allocatable, dimension(:) :: hb_tau0, hb_K, hb_nn, hb_m_arr
     real(wp), allocatable, dimension(:) :: hb_mu_min, hb_mu_max
-    real(wp), allocatable, dimension(:) :: fluid_inv_re       !< per-fluid Newtonian inverse-Re
+    real(wp), allocatable, dimension(:) :: fluid_inv_re  !< per-fluid Newtonian inverse-Re
+    real(wp) :: mu_T_scale = 0._wp  !< (T/T_ref) = mu_T_scale * p/rho for the power-law viscosity; 0 = constant mu
     !> @}
 
-    $:GPU_DECLARE(create='[any_non_newtonian, is_non_newtonian, hb_tau0, hb_K, hb_nn, hb_m_arr, hb_mu_min, hb_mu_max, fluid_inv_re]')
+    $:GPU_DECLARE(create='[any_non_newtonian, is_non_newtonian, hb_tau0, hb_K, hb_nn, hb_m_arr, hb_mu_min, hb_mu_max, &
+                  & fluid_inv_re, mu_T_scale]')
 
     ! WENO averaging flag: use arithmetic mean or unaltered WENO-reconstructed cell-boundary values
     !> @{
@@ -525,6 +527,8 @@ contains
         const_mean_T = .false.
         conduction = .false.
         Pr = dflt_real
+        mu_T_exp = 0._wp
+        mu_T_ref = dflt_real
         const_mean_rho = .false.
         const_mass_flux = .false.
         !> amplitude, frequency, and phase shift sinusoid in each direction
@@ -651,6 +655,7 @@ contains
             particle_cloud(i)%cloud_geometry = 1
             particle_cloud(i)%packing_method = dflt_int
             particle_cloud(i)%periodic = 0
+            particle_cloud(i)%Twall = dflt_real
         end do
 
         do i = 1, num_ib_patches_max_namelist
@@ -958,7 +963,9 @@ contains
 
         ! Fourier conduction: Pr defaults to 0.7 (air) when the case does not set it
         if (conduction .and. Pr <= 0._wp) Pr = 0.7_wp
-        $:GPU_UPDATE(device='[conduction, Pr]')
+        ! power-law viscosity mu = mu0 (T/mu_T_ref)^mu_T_exp: R T = p/rho = cv/gammas T, so T/T_ref = (p/rho) gammas/(cv mu_T_ref)
+        if (mu_T_exp > 0._wp) mu_T_scale = fluid_pp(1)%gamma/(fluid_pp(1)%cv*mu_T_ref)
+        $:GPU_UPDATE(device='[conduction, Pr, mu_T_exp, mu_T_scale]')
 
         $:GPU_UPDATE(device='[Bx0]')
 

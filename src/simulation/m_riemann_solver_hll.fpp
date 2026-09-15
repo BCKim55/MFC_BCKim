@@ -345,6 +345,12 @@ contains
                                 do i = 1, 2
                                     Re_avg_rsx_vf(${SF('')}$, i) = 2._wp/(1._wp/Re_L(i) + 1._wp/Re_R(i))
                                 end do
+                                ! power-law viscosity mu = mu0 (T/T_ref)^n with T/T_ref = mu_T_scale p/rho (single perfect gas)
+                                if (mu_T_scale > 0._wp) then
+                                    Re_avg_rsx_vf(${SF('')}$, 1) = Re_avg_rsx_vf(${SF('')}$, &
+                                                  & 1)/(0.5_wp*(mu_T_scale*pres_L/rho_L)**mu_T_exp &
+                                                  & + 0.5_wp*(mu_T_scale*pres_R/rho_R)**mu_T_exp)
+                                end if
                             end if
 
                             ! Wave speed estimates (wave_speeds=1: direct, wave_speeds=2: pressure-based)

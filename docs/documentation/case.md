@@ -434,6 +434,7 @@ A particle cloud is a compact specification of a bed of identical circular (2D) 
 | `moving_ibm`      | Integer | Motion flag applied to every particle (see `patch_ib(j)%%moving_ibm`). |
 | `seed`            | Integer | Random seed for reproducible placement (used by `packing_method = 1`). |
 | `packing_method`  | Integer | Algorithm used to place the particles. |
+| `Twall`           | Real    | Isothermal surface temperature [K] of every particle (`<= 0`: adiabatic). Without chemistry it requires `conduction` and `fluid_pp(1)%%cv`. |
 
 - `cloud_geometry` selects the cloud region:
   - `1` (box) uses `x[y,z]_centroid` and `length_x[y,z]` to define the region.
@@ -1093,6 +1094,8 @@ This parameter enables the use of true `pi_\infty` in bubble dynamics models whe
 | `const_mean_T`       | Logical | Hold the gas-phase mean temperature at its initial value (Khalloufi & Capecelatro 2023 thermal forcing) |
 | `conduction`         | Logical | Fourier heat conduction with thermal conductivity \f$\mu c_p/\mathrm{Pr}\f$ (single fluid, `viscous = T`) |
 | `Pr`                 | Real    | Prandtl number used by `conduction` (default 0.7) |
+| `mu_T_exp`                    | Real    | Exponent of the power-law viscosity \f$\mu = \mu_0 (T/T_{\mu})^{n}\f$ (single perfect gas; 0 = constant). |
+| `mu_T_ref`                    | Real    | Reference temperature \f$T_\mu\f$ [K] of the power-law viscosity. Requires `fluid_pp(1)%%cv`. |
 | `const_mean_rho`     | Logical | Hold the gas-phase mean density at its initial value (Khalloufi & Capecelatro 2023 mass source) |
 | `const_mass_flux`    | Logical | Hold the gas-phase mean x-momentum at its initial value (Khalloufi & Capecelatro 2023 constant mass flow rate) |
 

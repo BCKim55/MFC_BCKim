@@ -811,6 +811,8 @@ def _load():
     _r("const_mean_T", LOG)
     _r("conduction", LOG)
     _r("Pr", REAL, math=r"\f$\mathrm{Pr}\f$")
+    _r("mu_T_exp", REAL, math=r"\f$n_\mu\f$")
+    _r("mu_T_ref", REAL, math=r"\f$T_{\mu}\f$")
     _r("const_mean_rho", LOG)
     _r("const_mass_flux", LOG)
 
@@ -1018,6 +1020,7 @@ def _load():
     _pb_attrs["cloud_geometry"] = (INT, _pb_tags)
     _pb_attrs["packing_method"] = (INT, _pb_tags)
     _pb_attrs["periodic"] = (INT, _pb_tags)
+    _pb_attrs["Twall"] = (REAL, _pb_tags)
     REGISTRY.register_family(
         IndexedFamily(
             base_name="particle_cloud",
@@ -1369,6 +1372,8 @@ _nv(
     "const_mean_T",
     "conduction",
     "Pr",
+    "mu_T_exp",
+    "mu_T_ref",
     "const_mean_rho",
     "const_mass_flux",
     "bf_spatial_support",
