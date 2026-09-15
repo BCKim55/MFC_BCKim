@@ -221,6 +221,7 @@ class TestCase(case.Case):
             # Keep D/ (has steps 0 and mid_step) and p_all/ (restart data).
             dirpath = self.get_dirpath()
             common.delete_directory(os.path.join(dirpath, "silo_hdf5"))
+            common.delete_directory(os.path.join(dirpath, "silo_hdf5_lso"))
 
             # Phase 2: Restart simulation from midpoint.  Only the simulation
             # is run — it reads grid + IC directly from p_all/p0/<mid_step>/.
@@ -278,6 +279,8 @@ class TestCase(case.Case):
         common.delete_directory(os.path.join(dirpath, "lso"))
         common.delete_directory(os.path.join(dirpath, "p_all"))
         common.delete_directory(os.path.join(dirpath, "silo_hdf5"))
+        common.delete_directory(os.path.join(dirpath, "silo_hdf5_lso"))
+        common.delete_directory(os.path.join(dirpath, "binary_lso"))
         common.delete_directory(os.path.join(dirpath, "restart_data"))
         if self.params.get("bubbles_lagrange", "F") == "T":
             common.delete_directory(os.path.join(dirpath, "input"))
