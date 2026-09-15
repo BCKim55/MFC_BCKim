@@ -755,6 +755,15 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `fft_wrt`               | Logical | Enable FFT output |
 | `sim_data`              | Logical | Write interface and energy data files (post_process) |
 | `down_sample`           | Logical | Enable output downsampling |
+| `lso_filter`             | Logical | Apply an LSO Gaussian filter to the conserved variables at each save step (in-situ) |
+| `lso_filter_wrt`         | Logical | Write the filtered fields (`lustre_lso_*.dat`) alongside the unfiltered restart data |
+| `filter_sigma`           | Real    | Standard deviation of the in-situ Gaussian filter kernel in physical units (default: `patch_ib(1)%%radius`) |
+| `lso_down_sample_factor` | Integer | Coarsening factor for the LSO-filtered output grid (1 = full resolution) |
+| `lso_filter_sigma_in`    | Real    | Width of the already-filtered input when post-processing widens it further (defaults to `filter_sigma`) |
+| `lso_n_passes_[x,y,z]`   | Integer | Number of in-situ LSO filter passes per direction (derived by the toolchain; do not set) |
+| `lso_a_[x,y,z]`          | Real    | Per-pass in-situ LSO stencil coefficients (derived by the toolchain; do not set) |
+| `lso2_n_passes_[x,y,z]`  | Integer | Stage-2 (coarse grid) LSO passes per direction (derived by the toolchain; do not set) |
+| `lso2_a_[x,y,z]`         | Real    | Stage-2 per-pass LSO stencil coefficients (derived by the toolchain; do not set) |
 | `lso_pp_filter`          | Logical | Apply an LSO Gaussian filter to the conserved variables in the post-process stage |
 | `lso_filter_sigma_target` | Real   | Standard deviation of the target Gaussian filter kernel in physical units |
 | `lso_pp_n_passes_[x,y,z]` | Integer | Number of LSO filter passes per direction (derived by the toolchain; do not set) |
@@ -813,6 +822,10 @@ If `file_per_process` is true, then pre_process, simulation, and post_process mu
 - `probe_wrt` activates the output of state variables at coordinates specified by `probe(i)%[x;y,z]`.
 
 - `ib_state_wrt` is used to trigger post-processing of the IB state to be written out as a point mesh in the SILO files. When no IBs are moving, it also triggers force and torque calculation so that those values may be written to the output state files.
+
+- `lso_filter` with `lso_filter_wrt` applies the same LSO Gaussian filter in situ, at every save step of the simulation: the filtered conserved variables are written as `lustre_lso_*.dat` next to the unfiltered restart data (with the filtered gas mask `lustre_lso_mask_*.dat` for immersed-boundary cases), optionally on a grid coarsened by `lso_down_sample_factor` (tensor-product linear sampling at the coarse-cell centres, with `lso_[x,y,z]_cb.dat` coordinate files).
+For filter widths above the ~45-cell single-cascade stability limit the toolchain automatically splits the filter into a two-stage pyramid -- a fixed-width stage on the fine grid, decimation, and a variance-complement stage \f$\sigma_2=\sqrt{\sigma^2-\sigma_1^2}\f$ on the coarse grid -- which requires `parallel_io`.
+The post-process stage reads the filtered data back (writing `silo_hdf5_lso/`), and can widen it further to `lso_filter_sigma_target` using the saved mask for an exact mask-normalized composition.
 
 - `lso_pp_filter` applies a Gaussian low-pass filter of standard deviation `lso_filter_sigma_target` (in physical units) to the conserved variables in the post-process stage before the primitive state is rebuilt and written.
 The filter is a least-squares optimized (LSO) cascade of symmetric 9-point FIR passes whose composed transfer function matches the target Gaussian to a frequency-domain RMS error below \f$10^{-3}\f$; the per-direction pass counts (`lso_pp_n_passes_[x,y,z]`) and stencil weights (`lso_pp_a_[x,y,z]`) are derived automatically by the toolchain from the grid spacing and written into the input file — do not set them by hand (widths up to \f$\sigma \approx 45\f$ cells per direction are supported).

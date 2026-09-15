@@ -41,13 +41,20 @@ module m_data_input
     type(integer_field), allocatable, dimension(:,:), public :: bc_type    !< Boundary condition identifiers
     type(scalar_field), public                               :: q_T_sf     !< Temperature field
     type(integer_field), public                              :: ib_markers
+    !> False when the LSO file for the requested step does not exist (e.g. the initial condition, which pre_process writes
+    !! unfiltered); the caller skips such steps.
+    logical, public :: lso_step_found = .true.
+
+    !> Set to .true. after grid coordinates are first loaded; prevents re-opening grid files (x_cb.dat, y_cb.dat, z_cb.dat) via
+    !! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) on subsequent calls to s_read_parallel_data_files (e.g. the LSO two-pass write).
+    logical :: grid_loaded = .false.
 
     procedure(s_read_abstract_data_files), pointer :: s_read_data_files => null()
 
 contains
 
     !> Helper subroutine to read grid data files for a given direction
-    impure subroutine s_read_grid_data_direction(t_step_dir, direction, cb_array, d_array, cc_array, size_dim)
+    impure subroutine s_read_grid_data_direction(t_step_dir, direction, cb_array, d_array, cc_array, size_dim, file_prefix)
 
         character(len=*), intent(in)             :: t_step_dir
         character(len=1), intent(in)             :: direction
@@ -55,10 +62,15 @@ contains
         real(wp), dimension(0:), intent(out)     :: d_array
         real(wp), dimension(0:), intent(out)     :: cc_array
         integer, intent(in)                      :: size_dim
-        character(LEN=len_trim(t_step_dir) + 10) :: file_loc
+        character(len=*), intent(in), optional   :: file_prefix
+        character(LEN=len_trim(t_step_dir) + 14) :: file_loc
         logical                                  :: file_check
 
-        file_loc = trim(t_step_dir) // '/' // direction // '_cb.dat'
+        if (present(file_prefix)) then
+            file_loc = trim(t_step_dir) // '/' // trim(file_prefix) // direction // '_cb.dat'
+        else
+            file_loc = trim(t_step_dir) // '/' // direction // '_cb.dat'
+        end if
         inquire (FILE=trim(file_loc), EXIST=file_check)
 
         if (file_check) then
@@ -66,7 +78,7 @@ contains
             read (1) cb_array(-1:size_dim)
             close (1)
         else
-            call s_mpi_abort('File ' // direction // '_cb.dat is missing in ' // trim(t_step_dir) // '. Exiting.')
+            call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
         end if
 
         d_array(0:size_dim) = cb_array(0:size_dim) - cb_array(-1:size_dim - 1)
@@ -226,23 +238,51 @@ contains
             call s_assign_default_bc_type(bc_type)
         end if
 
-        ! Pass explicit slices so the dummy `dimension(-1:)` / `dimension(0:)` arguments map to the correct interior indices of the
-        ! actual arrays. Without slicing, when offset_x%beg or buff_size > 0 (i.e. format=1 parallel 3D ranks), Fortran's
-        ! assumed-shape re-mapping shifts the read by that many slots and leaves the last interior cells uninitialized - corrupting
-        ! downstream ghost-cell extrapolation.
-        call s_read_grid_data_direction(t_step_dir, 'x', x_cb(-1:m), dx(0:m), x_cc(0:m), m)
+        ! When LSO downsampling is active, read the stride-sampled coordinate files written by simulation with the 'lso_' prefix
+        ! (lso_x_cb.dat, lso_y_cb.dat, lso_z_cb.dat). These contain the coarsened physical coordinates covering the full domain
+        ! extent with 1/N grid points per direction. Pass explicit slices so the dummy `dimension(-1:)` / `dimension(0:)` arguments
+        ! map to the correct interior indices of the actual arrays. Without slicing, when offset_x%beg or buff_size > 0 (i.e.
+        ! format=1 parallel 3D ranks), Fortran's assumed-shape re-mapping shifts the read by that many slots and leaves the last
+        ! interior cells uninitialized - corrupting downstream ghost-cell extrapolation.
+        if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+            call s_read_grid_data_direction(t_step_dir, 'x', x_cb(-1:m), dx(0:m), x_cc(0:m), m, 'lso_')
 
-        if (n > 0) then
-            call s_read_grid_data_direction(t_step_dir, 'y', y_cb(-1:n), dy(0:n), y_cc(0:n), n)
+            if (n > 0) then
+                call s_read_grid_data_direction(t_step_dir, 'y', y_cb(-1:n), dy(0:n), y_cc(0:n), n, 'lso_')
 
-            if (p > 0) then
-                call s_read_grid_data_direction(t_step_dir, 'z', z_cb(-1:p), dz(0:p), z_cc(0:p), p)
+                if (p > 0) then
+                    call s_read_grid_data_direction(t_step_dir, 'z', z_cb(-1:p), dz(0:p), z_cc(0:p), p, 'lso_')
+                end if
+            end if
+        else
+            call s_read_grid_data_direction(t_step_dir, 'x', x_cb(-1:m), dx(0:m), x_cc(0:m), m)
+
+            if (n > 0) then
+                call s_read_grid_data_direction(t_step_dir, 'y', y_cb(-1:n), dy(0:n), y_cc(0:n), n)
+
+                if (p > 0) then
+                    call s_read_grid_data_direction(t_step_dir, 'z', z_cb(-1:p), dz(0:p), z_cc(0:p), p)
+                end if
+            end if
+        end if
+
+        if (lso_filter_wrt) then
+            file_loc = trim(t_step_dir) // '/lso_q_cons_vf1.dat'
+            inquire (FILE=trim(file_loc), EXIST=file_check)
+            if (.not. file_check) then
+                lso_step_found = .false.
+                return
             end if
         end if
 
         do i = 1, sys_size
             write (file_num, '(I0)') i
-            file_loc = trim(t_step_dir) // '/q_cons_vf' // trim(file_num) // '.dat'
+            ! When reading LSO-filtered data, look for the 'lso_' prefixed files written by simulation on the coarse grid.
+            if (lso_filter_wrt) then
+                file_loc = trim(t_step_dir) // '/lso_q_cons_vf' // trim(file_num) // '.dat'
+            else
+                file_loc = trim(t_step_dir) // '/q_cons_vf' // trim(file_num) // '.dat'
+            end if
             inquire (FILE=trim(file_loc), EXIST=file_check)
 
             if (file_check) then
@@ -281,60 +321,45 @@ contains
         character(len=10)                    :: t_step_string
         integer                              :: i
 
-        allocate (x_cb_glb(-1:m_glb))
-        allocate (y_cb_glb(-1:n_glb))
-        allocate (z_cb_glb(-1:p_glb))
+        ! Grid coordinates are invariant across time steps: only read them once. On subsequent calls (e.g. the unfiltered second
+        ! pass when lso_filter_wrt=T), skip grid file reads to avoid a known MPI-IO hang when re-opening the same file with
+        ! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) a second time.
+        if (.not. grid_loaded) then
+            allocate (x_cb_glb(-1:m_glb))
+            allocate (y_cb_glb(-1:n_glb))
+            allocate (z_cb_glb(-1:p_glb))
 
-        if (down_sample) then
-            stride = 3
-        else
-            stride = 1
-        end if
-
-        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'x_cb.dat'
-        inquire (FILE=trim(file_loc), EXIST=file_exist, SIZE=file_bytes)
-
-        ! The grid file holds one cell boundary per value, so its size says which grid wrote the restart. Without
-        ! this check a case file whose resolution no longer matches the run reads past the end of every restart
-        ! file and post-processes silently, exiting 0 with NaN-filled output -- which is indistinguishable from
-        ! success until someone plots it. The strided read down_sample performs touches stride*(m_glb + 1) + 1
-        ! boundaries of a full-resolution file, so it needs more of the file, not less; only the un-strided read
-        ! pins the size exactly, since down-sampling three grids of different size can land on the same m_glb.
-        if (file_exist) then
-            bytes_needed = (int(stride, 8)*int(m_glb + 1, 8) + 1_8)*int(storage_size(0._wp)/8, 8)
-            if (file_bytes < bytes_needed .or. (.not. down_sample .and. file_bytes /= bytes_needed)) then
-                call s_int_to_str(m_glb, case_m_str)
-                call s_int_to_str(int(file_bytes/int(storage_size(0._wp)/8, 8)) - 2, file_m_str)
-                call s_mpi_abort('Restart grid mismatch: this case has m = ' // trim(case_m_str) // ' but ' // trim(file_loc) &
-                                 & // ' was written with m = ' // trim(file_m_str) &
-                                 & // '. Post-processing must use the same grid as the run that wrote the ' &
-                                 & // 'restart files, or it reads past the end of every file and writes NaN.')
+            if (down_sample) then
+                stride = 3
+            else
+                stride = 1
             end if
-            data_size = m_glb + 2
-            call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
 
-            call MPI_TYPE_VECTOR(data_size, 1, stride, mpi_p, filetype, ierr)
-            call MPI_TYPE_COMMIT(filetype, ierr)
-
-            offset = 0
-            call MPI_FILE_SET_VIEW(ifile, offset, mpi_p, filetype, 'native', mpi_info_int, ierr)
-
-            call MPI_FILE_READ(ifile, x_cb_glb, data_size, mpi_p, status, ierr)
-            call MPI_FILE_CLOSE(ifile, ierr)
-        else
-            call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
-        end if
-
-        ! Bitwise-consistent grid distribution from the global file
-        call s_apply_grid_from_global_dim(x_cb_glb, m_glb, m, start_idx(1), bc_x%beg, bc_x%end, offset_x%beg, offset_x%end, &
-                                          & buff_size, buff_size, x_cb, x_cc, dx)
-
-        if (n > 0) then
-            file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'y_cb.dat'
-            inquire (FILE=trim(file_loc), EXIST=file_exist)
+            if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+                ! Coarsened LSO output: read the interpolated coarse boundaries written by the simulation
+                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_x_cb.dat'
+            else
+                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'x_cb.dat'
+            end if
+            inquire (FILE=trim(file_loc), EXIST=file_exist, SIZE=file_bytes)
 
             if (file_exist) then
-                data_size = n_glb + 2
+                ! The grid file holds one cell boundary per value, so its size says which grid wrote the restart. Without
+                ! this check a case file whose resolution no longer matches the run reads past the end of every restart
+                ! file and post-processes silently, exiting 0 with NaN-filled output. The interpolated LSO coarse file is
+                ! written for exactly this case's coarse grid, so only the full-resolution file is checked.
+                if (.not. (lso_filter_wrt .and. lso_down_sample_factor > 1)) then
+                    bytes_needed = (int(stride, 8)*int(m_glb + 1, 8) + 1_8)*int(storage_size(0._wp)/8, 8)
+                    if (file_bytes < bytes_needed .or. (.not. down_sample .and. file_bytes /= bytes_needed)) then
+                        call s_int_to_str(m_glb, case_m_str)
+                        call s_int_to_str(int(file_bytes/int(storage_size(0._wp)/8, 8)) - 2, file_m_str)
+                        call s_mpi_abort('Restart grid mismatch: this case has m = ' // trim(case_m_str) // ' but ' &
+                                         & // trim(file_loc) // ' was written with m = ' // trim(file_m_str) &
+                                         & // '. Post-processing must use the same grid as the run that wrote the ' &
+                                         & // 'restart files, or it reads past the end of every file and writes NaN.')
+                    end if
+                end if
+                data_size = m_glb + 2
                 call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
 
                 call MPI_TYPE_VECTOR(data_size, 1, stride, mpi_p, filetype, ierr)
@@ -343,21 +368,27 @@ contains
                 offset = 0
                 call MPI_FILE_SET_VIEW(ifile, offset, mpi_p, filetype, 'native', mpi_info_int, ierr)
 
-                call MPI_FILE_READ(ifile, y_cb_glb, data_size, mpi_p, status, ierr)
+                call MPI_FILE_READ(ifile, x_cb_glb, data_size, mpi_p, status, ierr)
                 call MPI_FILE_CLOSE(ifile, ierr)
             else
                 call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
             end if
 
-            call s_apply_grid_from_global_dim(y_cb_glb, n_glb, n, start_idx(2), bc_y%beg, bc_y%end, offset_y%beg, offset_y%end, &
-                                              & buff_size, buff_size, y_cb, y_cc, dy)
+            ! Bitwise-consistent grid distribution from the global file
+            call s_apply_grid_from_global_dim(x_cb_glb, m_glb, m, start_idx(1), bc_x%beg, bc_x%end, offset_x%beg, offset_x%end, &
+                                              & buff_size, buff_size, x_cb, x_cc, dx)
 
-            if (p > 0) then
-                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'z_cb.dat'
+            if (n > 0) then
+                if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+                    ! Coarsened LSO output: read the interpolated coarse boundaries written by the simulation
+                    file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_y_cb.dat'
+                else
+                    file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'y_cb.dat'
+                end if
                 inquire (FILE=trim(file_loc), EXIST=file_exist)
 
                 if (file_exist) then
-                    data_size = p_glb + 2
+                    data_size = n_glb + 2
                     call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
 
                     call MPI_TYPE_VECTOR(data_size, 1, stride, mpi_p, filetype, ierr)
@@ -366,20 +397,50 @@ contains
                     offset = 0
                     call MPI_FILE_SET_VIEW(ifile, offset, mpi_p, filetype, 'native', mpi_info_int, ierr)
 
-                    call MPI_FILE_READ(ifile, z_cb_glb, data_size, mpi_p, status, ierr)
+                    call MPI_FILE_READ(ifile, y_cb_glb, data_size, mpi_p, status, ierr)
                     call MPI_FILE_CLOSE(ifile, ierr)
                 else
                     call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
                 end if
 
-                call s_apply_grid_from_global_dim(z_cb_glb, p_glb, p, start_idx(3), bc_z%beg, bc_z%end, offset_z%beg, &
-                                                  & offset_z%end, buff_size, buff_size, z_cb, z_cc, dz)
+                call s_apply_grid_from_global_dim(y_cb_glb, n_glb, n, start_idx(2), bc_y%beg, bc_y%end, offset_y%beg, &
+                                                  & offset_y%end, buff_size, buff_size, y_cb, y_cc, dy)
+
+                if (p > 0) then
+                    if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+                        ! Coarsened LSO output: read the interpolated coarse boundaries written by the simulation
+                        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_z_cb.dat'
+                    else
+                        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'z_cb.dat'
+                    end if
+                    inquire (FILE=trim(file_loc), EXIST=file_exist)
+
+                    if (file_exist) then
+                        data_size = p_glb + 2
+                        call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
+
+                        call MPI_TYPE_VECTOR(data_size, 1, stride, mpi_p, filetype, ierr)
+                        call MPI_TYPE_COMMIT(filetype, ierr)
+
+                        offset = 0
+                        call MPI_FILE_SET_VIEW(ifile, offset, mpi_p, filetype, 'native', mpi_info_int, ierr)
+
+                        call MPI_FILE_READ(ifile, z_cb_glb, data_size, mpi_p, status, ierr)
+                        call MPI_FILE_CLOSE(ifile, ierr)
+                    else
+                        call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
+                    end if
+
+                    call s_apply_grid_from_global_dim(z_cb_glb, p_glb, p, start_idx(3), bc_z%beg, bc_z%end, offset_z%beg, &
+                                                      & offset_z%end, buff_size, buff_size, z_cb, z_cc, dz)
+                end if
             end if
+
+            deallocate (x_cb_glb, y_cb_glb, z_cb_glb)
+            grid_loaded = .true.
         end if
 
         call s_read_parallel_conservative_data(t_step, m_MOK, n_MOK, p_MOK, WP_MOK, MOK, str_MOK, NVARS_MOK)
-
-        deallocate (x_cb_glb, y_cb_glb, z_cb_glb)
 
         if (bc_io) then
             call s_read_parallel_boundary_condition_files(bc_type)
@@ -401,15 +462,28 @@ contains
         integer, dimension(MPI_STATUS_SIZE)          :: status
         integer(KIND=MPI_OFFSET_KIND)                :: disp, var_MOK
         character(LEN=path_len + 2*name_len)         :: file_loc
+        character(LEN=path_len + 2*name_len)         :: file_loc_base
         logical                                      :: file_exist
         character(len=10)                            :: t_step_string
         integer                                      :: i
 
         if (file_per_process) then
             call s_int_to_str(t_step, t_step_string)
-            write (file_loc, '(I0,A1,I7.7,A)') t_step, '_', proc_rank, '.dat'
-            file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) // trim(file_loc)
-            inquire (FILE=trim(file_loc), EXIST=file_exist)
+            write (file_loc_base, '(I0,A1,I7.7,A)') t_step, '_', proc_rank, '.dat'
+            if (lso_filter_wrt) then
+                file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) // 'lso_' &
+                                & // trim(file_loc_base)
+                ! Absent LSO file (e.g. the initial condition, written unfiltered by pre_process):
+                ! signal the caller to skip this step; the unfiltered file may be on a different grid.
+                inquire (FILE=trim(file_loc), EXIST=file_exist)
+                if (.not. file_exist) then
+                    lso_step_found = .false.
+                    return
+                end if
+            else
+                file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) // trim(file_loc_base)
+                inquire (FILE=trim(file_loc), EXIST=file_exist)
+            end if
 
             if (file_exist) then
                 call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
@@ -464,9 +538,20 @@ contains
                 call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
             end if
         else
-            write (file_loc, '(I0,A)') t_step, '.dat'
-            file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(file_loc)
-            inquire (FILE=trim(file_loc), EXIST=file_exist)
+            write (file_loc_base, '(I0,A)') t_step, '.dat'
+            if (lso_filter_wrt) then
+                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_' // trim(file_loc_base)
+                ! Absent LSO file (e.g. the initial condition, written unfiltered by pre_process):
+                ! signal the caller to skip this step; the unfiltered file may be on a different grid.
+                inquire (FILE=trim(file_loc), EXIST=file_exist)
+                if (.not. file_exist) then
+                    lso_step_found = .false.
+                    return
+                end if
+            else
+                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(file_loc_base)
+                inquire (FILE=trim(file_loc), EXIST=file_exist)
+            end if
 
             if (file_exist) then
                 call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)

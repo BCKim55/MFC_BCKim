@@ -7,8 +7,9 @@ program p_main
 
     use m_global_parameters
     use m_start_up
+    use m_data_output, only: s_switch_output_dirs
     use m_derived_types, only: scalar_field
-    use m_data_input, only: q_cons_vf
+    use m_data_input, only: q_cons_vf, lso_step_found
     use m_lso_pp_filter, only: s_apply_lso_pp_filter, s_apply_lso_pp_filter_masked, s_lso_pp_mask_from_ib
 
     implicit none
@@ -41,28 +42,62 @@ program p_main
 
         call cpu_time(start)
 
+        ! Primary pass: read (LSO-filtered when lso_filter_wrt=T) and write.
         call s_perform_time_step(t_step)
 
-        ! LSO filter: filter q_cons_vf in place (mask-normalized when immersed boundaries
-        ! are present), then rebuild the primitive state from the filtered fields.
-        if (lso_pp_filter) then
-            block
-                type(scalar_field) :: w_vf(1:1)
-
-                if (ib) then
+        ! Steps with no LSO file (the initial condition is written unfiltered by pre_process)
+        ! are skipped: there is no filtered state to convert or save.
+        if (lso_filter_wrt .and. .not. lso_step_found) then
+            if (proc_rank == 0) then
+                print '(A,I0,A)', 'Warning: no lustre_lso file for step ', t_step, &
+                    & ' (the initial condition is written unfiltered); skipping.'
+            end if
+        else
+            ! Post-process filter: filter q_cons_vf in place (pre-filtered coarse data or original data), reconvert
+            ! to primitive, and compute the stat products while q_cons_vf still holds the filtered state.
+            if (lso_pp_filter) then
+                ! Normalization weight: the simulation-written filtered mask, the ib_markers gas mask, or none.
+                block
+                    type(scalar_field) :: w_vf(1:1)
+                    logical            :: have_w
+                    have_w = .false.
                     allocate (w_vf(1)%sf(lbound(q_cons_vf(1)%sf, 1):ubound(q_cons_vf(1)%sf, 1),lbound(q_cons_vf(1)%sf, &
                               & 2):ubound(q_cons_vf(1)%sf, 2),lbound(q_cons_vf(1)%sf, 3):ubound(q_cons_vf(1)%sf, 3)))
-                    call s_lso_pp_mask_from_ib(w_vf)
-                    call s_apply_lso_pp_filter_masked(q_cons_vf, w_vf)
+                    if (lso_filter_wrt) then
+                        call s_read_lso_mask(w_vf, t_step, have_w)
+                        if (.not. have_w .and. ib .and. proc_rank == 0) then
+                            print '(A)', 'Warning: lso_mask file not found; post_process filter runs without IB normalization.'
+                        end if
+                    else if (ib) then
+                        call s_lso_pp_mask_from_ib(w_vf)
+                        have_w = .true.
+                    end if
+                    if (have_w) then
+                        call s_apply_lso_pp_filter_masked(q_cons_vf, w_vf)
+                    else
+                        call s_apply_lso_pp_filter(q_cons_vf)
+                    end if
                     deallocate (w_vf(1)%sf)
-                else
-                    call s_apply_lso_pp_filter(q_cons_vf)
-                end if
-            end block
-            call s_reconvert_filtered_to_primitive()
-        end if
+                end block
+                call s_reconvert_filtered_to_primitive()
+            end if
 
-        call s_save_data(t_step, varname, pres, c)
+            call s_save_data(t_step, varname, pres, c)
+
+            ! Secondary pass: when lso_filter_wrt=T, also write the unfiltered data to silo_hdf5/. Grid files are NOT re-opened
+            ! (grid_loaded flag skips them), avoiding a known MPI-IO hang from re-opening the same file with
+            ! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) a second time. NOTE: When lso_down_sample_factor > 1 the LSO files are on a coarser
+            ! grid than the unfiltered data. The secondary pass cannot switch grid dimensions at runtime, so it is skipped. Run
+            ! post_process again with lso_filter_wrt=.false. to process the full-resolution unfiltered data.
+            if (lso_filter_wrt .and. lso_down_sample_factor <= 1) then
+                lso_filter_wrt = .false.
+                call s_reload_data(t_step)
+                call s_switch_output_dirs(.false.)
+                call s_save_data(t_step, varname, pres, c)
+                call s_switch_output_dirs(.true.)
+                lso_filter_wrt = .true.
+            end if
+        end if
 
         call cpu_time(finish)
 

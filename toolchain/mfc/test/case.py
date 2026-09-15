@@ -275,6 +275,7 @@ class TestCase(case.Case):
             common.delete_file(f)
 
         common.delete_directory(os.path.join(dirpath, "D"))
+        common.delete_directory(os.path.join(dirpath, "lso"))
         common.delete_directory(os.path.join(dirpath, "p_all"))
         common.delete_directory(os.path.join(dirpath, "silo_hdf5"))
         common.delete_directory(os.path.join(dirpath, "restart_data"))

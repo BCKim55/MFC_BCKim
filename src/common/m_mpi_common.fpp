@@ -1377,6 +1377,12 @@ contains
             recon_order = igr_order
         end if
 
+        ! post_process does not perform reconstruction; use the minimum stencil count so that MPI decomposition succeeds on small
+        ! (e.g. LSO coarsened) grids.
+#ifdef MFC_POST_PROCESS
+        recon_order = 1
+#endif
+
         ! 3D Cartesian Processor Topology
         if (n > 0) then
             if (p > 0) then

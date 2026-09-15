@@ -87,6 +87,13 @@ contains
                 p = int((p + 1)/3) - 1
             end if
 
+            ! LSO-filtered output saved on a coarser grid: shrink m/n/p to match the file.
+            if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+                m = int((m + 1)/lso_down_sample_factor) - 1
+                if (n > 0) n = int((n + 1)/lso_down_sample_factor) - 1
+                if (p > 0) p = int((p + 1)/lso_down_sample_factor) - 1
+            end if
+
             m_glb = m
             n_glb = n
             p_glb = p
@@ -154,7 +161,9 @@ contains
             end if
         end if
 
+        lso_step_found = .true.
         call s_read_data_files(t_step)
+        if (lso_filter_wrt .and. .not. lso_step_found) return
 
         ! seed the chemistry temperature over the INTERIOR only (mirrors the simulation,
         ! m_start_up): the ghost q_cons is unread at this point, so a ghost-inclusive sweep
@@ -176,6 +185,19 @@ contains
         call s_convert_conservative_to_primitive_variables(q_cons_vf, q_T_sf, q_prim_vf, idwbuff)
 
     end subroutine s_perform_time_step
+
+    !> Reload conservative variable data for a time step and reconvert to primitive variables, WITHOUT printing the progress bar.
+    !! Used for the LSO two-pass write: after the normal filtered pass the caller toggles lso_filter_wrt=.false., calls
+    !! s_reload_data to read the unfiltered conservative data, then writes a second Silo database to silo_hdf5/. Grid file reads are
+    !! skipped automatically (grid_loaded flag in m_data_input).
+    impure subroutine s_reload_data(t_step)
+
+        integer, intent(in) :: t_step
+
+        call s_read_data_files(t_step)
+        call s_reconvert_filtered_to_primitive()
+
+    end subroutine s_reload_data
 
     !> Rebuild the primitive state from q_cons_vf after the LSO filter has modified it in place: refresh ghost cells and reconvert,
     !! exactly as s_perform_time_step does for the freshly read data.
@@ -708,6 +730,117 @@ contains
 
     end subroutine s_write_field
 
+    !> Read <fname><t_step>.dat (n_vars MPI-IO subarrays back-to-back) into q_vf. Sets found = .false. when the file is missing.
+    impure subroutine s_read_lso_field_file(q_vf, n_vars, t_step, found, fname)
+
+        type(scalar_field), intent(inout)      :: q_vf(:)
+        integer, intent(in)                    :: n_vars, t_step
+        logical, intent(out)                   :: found
+        character(LEN=*), intent(in), optional :: fname  !< file basename prefix
+
+#ifdef MFC_MPI
+        integer                              :: ifile, ierr, data_size, i
+        integer, dimension(MPI_STATUS_SIZE)  :: status
+        integer(kind=MPI_OFFSET_KIND)        :: disp
+        integer(kind=MPI_OFFSET_KIND)        :: m_MOK, n_MOK, p_MOK
+        integer(kind=MPI_OFFSET_KIND)        :: WP_MOK, var_MOK, MOK
+        integer, dimension(num_dims)         :: sizes_glb, sizes_loc, start_loc
+        integer                              :: mpi_view
+        character(LEN=path_len + 2*name_len) :: file_loc
+        logical                              :: file_exist
+
+        found = .true.
+
+        sizes_glb(1) = m_glb + 1; sizes_loc(1) = m + 1; start_loc(1) = start_idx(1)
+        if (num_dims >= 2) then
+            sizes_glb(2) = n_glb + 1; sizes_loc(2) = n + 1; start_loc(2) = start_idx(2)
+        end if
+        if (num_dims == 3) then
+            sizes_glb(3) = p_glb + 1; sizes_loc(3) = p + 1; start_loc(3) = start_idx(3)
+        end if
+        data_size = (m + 1)*(n + 1)*(p + 1)
+        m_MOK = int(m_glb + 1, MPI_OFFSET_KIND)
+        n_MOK = int(n_glb + 1, MPI_OFFSET_KIND)
+        p_MOK = int(p_glb + 1, MPI_OFFSET_KIND)
+        WP_MOK = int(storage_size(0._stp)/8, MPI_OFFSET_KIND)
+        MOK = int(1._wp, MPI_OFFSET_KIND)
+
+        if (present(fname)) then
+            write (file_loc, '(A,I0,A)') trim(fname), t_step, '.dat'
+        else
+            write (file_loc, '(A,I0,A)') 'lso_mask_', t_step, '.dat'
+        end if
+        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(file_loc)
+        inquire (FILE=trim(file_loc), EXIST=file_exist)
+        if (.not. file_exist) then
+            found = .false.
+            return
+        end if
+        ! MPI_COMM_SELF so ranks open independently (collective open would deadlock if some ranks skip this path).
+        call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, MPI_MODE_RDONLY, MPI_INFO_NULL, ifile, ierr)
+
+        do i = 1, n_vars
+            call MPI_TYPE_CREATE_SUBARRAY(num_dims, sizes_glb, sizes_loc, start_loc, MPI_ORDER_FORTRAN, mpi_p, mpi_view, ierr)
+            call MPI_TYPE_COMMIT(mpi_view, ierr)
+
+            var_MOK = int(i, MPI_OFFSET_KIND)
+            disp = m_MOK*max(MOK, n_MOK)*max(MOK, p_MOK)*WP_MOK*(var_MOK - 1)
+
+            call MPI_FILE_SET_VIEW(ifile, disp, mpi_p, mpi_view, 'native', MPI_INFO_NULL, ierr)
+            call MPI_FILE_READ(ifile, q_vf(i)%sf, data_size*mpi_io_type, mpi_io_p, status, ierr)
+
+            call MPI_TYPE_FREE(mpi_view, ierr)
+        end do
+
+        call MPI_FILE_CLOSE(ifile, ierr)
+#else
+        found = .true.
+#endif
+
+    end subroutine s_read_lso_field_file
+
+    !> Read the simulation-written stage-1 filtered gas-mask (lso_mask_<t>.dat) into the INTERIOR of w_vf (caller allocates
+    !! w_vf(1)%sf with ghost bounds). found is made collectively consistent so all ranks agree on whether to take the masked path.
+    impure subroutine s_lso_sync_found(found)
+
+        logical, intent(inout) :: found
+
+#ifdef MFC_MPI
+        integer :: found_int, found_min, ierr
+
+        found_int = merge(1, 0, found)
+        call MPI_ALLREDUCE(found_int, found_min, 1, MPI_INTEGER, MPI_MIN, MPI_COMM_WORLD, ierr)
+        found = (found_min == 1)
+#endif
+
+    end subroutine s_lso_sync_found
+
+    impure subroutine s_read_lso_mask(w_vf, t_step, found)
+
+        type(scalar_field), intent(inout) :: w_vf(1:1)
+        integer, intent(in)               :: t_step
+        logical, intent(out)              :: found
+        type(scalar_field)                :: w_io(1:1)
+        integer                           :: j, k, l
+
+        allocate (w_io(1)%sf(0:m,0:n,0:p))
+        call s_read_lso_field_file(w_io, 1, t_step, found, 'lso_mask_')
+
+        call s_lso_sync_found(found)
+
+        if (found) then
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        w_vf(1)%sf(j, k, l) = w_io(1)%sf(j, k, l)
+                    end do
+                end do
+            end do
+        end if
+        deallocate (w_io(1)%sf)
+
+    end subroutine s_read_lso_mask
+
     !> Transpose 3-D complex data from x-pencil to y-pencil layout via MPI_Alltoall.
     subroutine s_mpi_transpose_x2y
 
@@ -809,9 +942,9 @@ contains
         call s_initialize_boundary_common_module()
         call s_initialize_variables_conversion_module(store_mixture_fields=.true., lagrange_beta_index=beta_idx)
         call s_initialize_data_input_module()
-        if (lso_pp_filter) call s_initialize_lso_pp_filter_module()
         call s_initialize_derived_variables_module()
         call s_initialize_data_output_module()
+        if (lso_pp_filter) call s_initialize_lso_pp_filter_module()
 
         if (parallel_io .neqv. .true.) then
             s_read_data_files => s_read_serial_data_files

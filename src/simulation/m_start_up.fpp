@@ -45,6 +45,7 @@ module m_start_up
     use m_model
     use m_particle_cloud
     use m_collisions
+    use m_lso_filter
     use m_compile_specific
     use m_checker_common
     use m_checker
@@ -306,6 +307,8 @@ contains
             p_glb_ds = int((p_glb + 1)/3) - 1
         end if
 
+        ! LSO downsampled grid sizes are set in s_initialize_modules.
+
         if (file_exist) then
             data_size = m_glb + 2
             call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
@@ -493,6 +496,69 @@ contains
             else
                 call s_mpi_abort('File ' // trim(file_loc) // ' is missing. Exiting.')
             end if
+        end if
+
+        ! Write interpolated coarsened global coordinates to restart_data so that the parallel post_process
+        ! can read them directly instead of striding x_cb.dat (which misses the last cell when m+1 is not
+        ! divisible by lso_down_sample_factor). Written once by rank 0; all other ranks skip.
+        if (lso_filter_wrt .and. lso_down_sample_factor > 1 .and. proc_rank == 0) then
+            block
+                integer               :: lso_j, lso_cb0, lso_cb1, lso_m_glb_ds
+                real(wp)              :: lso_alpha_cb, lso_w_cb
+                real(wp), allocatable :: lso_cb_tmp(:)
+
+                lso_m_glb_ds = int((m_glb + 1)/lso_down_sample_factor) - 1
+                allocate (lso_cb_tmp(-1:lso_m_glb_ds))
+                do lso_j = -1, lso_m_glb_ds
+                    lso_alpha_cb = real(lso_j + 1, wp)*real(m_glb + 1, wp)/real(lso_m_glb_ds + 1, wp) - 1._wp
+                    lso_cb0 = int(lso_alpha_cb); lso_cb0 = max(lso_cb0, -1)
+                    lso_cb1 = min(lso_cb0 + 1, m_glb)
+                    lso_w_cb = lso_alpha_cb - real(lso_cb0, wp)
+                    lso_cb_tmp(lso_j) = (1._wp - lso_w_cb)*x_cb_glb(lso_cb0) + lso_w_cb*x_cb_glb(lso_cb1)
+                end do
+                file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_x_cb.dat'
+                data_size = lso_m_glb_ds + 2
+                call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+                call MPI_FILE_WRITE(ifile, lso_cb_tmp, data_size, mpi_p, status, ierr)
+                call MPI_FILE_CLOSE(ifile, ierr)
+                deallocate (lso_cb_tmp)
+
+                if (n > 0) then
+                    lso_m_glb_ds = int((n_glb + 1)/lso_down_sample_factor) - 1
+                    allocate (lso_cb_tmp(-1:lso_m_glb_ds))
+                    do lso_j = -1, lso_m_glb_ds
+                        lso_alpha_cb = real(lso_j + 1, wp)*real(n_glb + 1, wp)/real(lso_m_glb_ds + 1, wp) - 1._wp
+                        lso_cb0 = int(lso_alpha_cb); lso_cb0 = max(lso_cb0, -1)
+                        lso_cb1 = min(lso_cb0 + 1, n_glb)
+                        lso_w_cb = lso_alpha_cb - real(lso_cb0, wp)
+                        lso_cb_tmp(lso_j) = (1._wp - lso_w_cb)*y_cb_glb(lso_cb0) + lso_w_cb*y_cb_glb(lso_cb1)
+                    end do
+                    file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_y_cb.dat'
+                    data_size = lso_m_glb_ds + 2
+                    call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+                    call MPI_FILE_WRITE(ifile, lso_cb_tmp, data_size, mpi_p, status, ierr)
+                    call MPI_FILE_CLOSE(ifile, ierr)
+                    deallocate (lso_cb_tmp)
+                end if
+
+                if (p > 0) then
+                    lso_m_glb_ds = int((p_glb + 1)/lso_down_sample_factor) - 1
+                    allocate (lso_cb_tmp(-1:lso_m_glb_ds))
+                    do lso_j = -1, lso_m_glb_ds
+                        lso_alpha_cb = real(lso_j + 1, wp)*real(p_glb + 1, wp)/real(lso_m_glb_ds + 1, wp) - 1._wp
+                        lso_cb0 = int(lso_alpha_cb); lso_cb0 = max(lso_cb0, -1)
+                        lso_cb1 = min(lso_cb0 + 1, p_glb)
+                        lso_w_cb = lso_alpha_cb - real(lso_cb0, wp)
+                        lso_cb_tmp(lso_j) = (1._wp - lso_w_cb)*z_cb_glb(lso_cb0) + lso_w_cb*z_cb_glb(lso_cb1)
+                    end do
+                    file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_z_cb.dat'
+                    data_size = lso_m_glb_ds + 2
+                    call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+                    call MPI_FILE_WRITE(ifile, lso_cb_tmp, data_size, mpi_p, status, ierr)
+                    call MPI_FILE_CLOSE(ifile, ierr)
+                    deallocate (lso_cb_tmp)
+                end if
+            end block
         end if
 
         deallocate (x_cb_glb, y_cb_glb, z_cb_glb)
@@ -726,6 +792,7 @@ contains
         integer(kind=8)         :: i, j, k, l
         integer                 :: stor
         integer                 :: save_count
+        character(LEN=path_len) :: orig_case_dir
 
         if (down_sample) then
             call s_populate_variables_buffers(bc_type, q_cons_ts(1)%vf)
@@ -777,6 +844,12 @@ contains
             save_count = t_step
         end if
 
+        ! Filter the save-copy so the primary write keeps the unfiltered state.
+        if (lso_filter .and. lso_filter_wrt) then
+            call s_copy_and_apply_lso_filter(q_cons_ts(stor)%vf)
+            $:GPU_WAIT()
+        end if
+
         if (bubbles_lagrange) then
             $:GPU_UPDATE(host='[lag_id, mtn_pos, mtn_posPrev, mtn_vel, intfc_rad, intfc_vel, bub_R0, Rmax_stats, Rmin_stats, &
                          & bub_dphidt, gas_p, gas_mv, gas_mg, gas_betaT, gas_betaC]')
@@ -793,6 +866,70 @@ contains
             if (lag_params%write_bubbles_stats) call s_write_lag_bubble_stats()
         else
             call s_write_data_files(q_cons_ts(stor)%vf, q_T_sf, q_prim_vf, save_count, bc_type)
+        end if
+        ! Write the filtered copy with an "lso_" filename prefix, stride-sampling first when lso_down_sample_factor > 1.
+        if (lso_filter .and. lso_filter_wrt) then
+#ifndef FRONTIER_UNIFIED
+            do i = 1, sys_size
+                $:GPU_UPDATE(host='[q_filt_vf(i)%sf]')
+            end do
+#endif
+            lso_file_prefix = 'lso_'
+            if (lso_down_sample_factor > 1) then
+                call nvtxStartRange("LSO-COARSEN")
+                call s_lso_stride_sample(q_filt_vf, q_filt_ds_vf)
+                if (ib) then
+#ifndef FRONTIER_UNIFIED
+                    $:GPU_UPDATE(host='[q_lso_mask_vf(1)%sf]')
+#endif
+                    call s_lso_stride_sample(q_lso_mask_vf, q_lso_mask_ds_vf)
+                end if
+                ! Two-stage pyramid: finish sigma2 on the coarse grid and normalize
+                ! there (no-op unless lso2 passes are configured by the toolchain).
+                call s_lso_filter_stage2()
+                call nvtxEndRange
+                if (bubbles_lagrange) then
+                    call s_write_data_files(q_filt_ds_vf, q_T_sf, q_prim_vf, save_count, bc_type, q_beta(1))
+                else
+                    call s_write_data_files(q_filt_ds_vf, q_T_sf, q_prim_vf, save_count, bc_type)
+                end if
+            else
+                if (bubbles_lagrange) then
+                    call s_write_data_files(q_filt_vf, q_T_sf, q_prim_vf, save_count, bc_type, q_beta(1))
+                else
+                    call s_write_data_files(q_filt_vf, q_T_sf, q_prim_vf, save_count, bc_type)
+                end if
+            end if
+            lso_file_prefix = ''
+
+            ! Write the filtered gas mask w (MPI-IO) so post_process can compose filter2(w*qhat)/filter2(w).
+            if (ib .and. parallel_io) then
+                if (lso_down_sample_factor > 1) then
+                    call s_write_lso_field_file(q_lso_mask_ds_vf, 1, save_count, 'lso_mask_')
+                else
+#ifndef FRONTIER_UNIFIED
+                    $:GPU_UPDATE(host='[q_lso_mask_vf(1)%sf]')
+#endif
+                    call s_write_lso_field_file(q_lso_mask_vf, 1, save_count, 'lso_mask_')
+                end if
+            end if
+        end if
+
+        ! Serial path: also dump the (full-resolution) filtered copy under <case_dir>/lso.
+        if (lso_filter .and. lso_filter_wrt .and. .not. parallel_io) then
+            do i = 1, sys_size
+#ifndef FRONTIER_UNIFIED
+                $:GPU_UPDATE(host='[q_filt_vf(i)%sf]')
+#endif
+            end do
+            orig_case_dir = case_dir
+            case_dir = trim(case_dir) // '/lso'
+            if (bubbles_lagrange) then
+                call s_write_data_files(q_filt_vf, q_T_sf, q_prim_vf, save_count, bc_type, q_beta(1))
+            else
+                call s_write_data_files(q_filt_vf, q_T_sf, q_prim_vf, save_count, bc_type)
+            end if
+            case_dir = orig_case_dir
         end if
 
         ! Write IB kinematic state for restart
@@ -838,6 +975,26 @@ contains
         call s_initialize_mpi_proxy_module()
         call s_initialize_variables_conversion_module(enforce_density_floor=.true., preserve_qbmm_number=.true.)
         if (grid_geometry == 3) call s_initialize_fftw_module()
+
+        ! Downsampled grid sizes (needed before s_initialize_lso_filter_module).
+        if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+            m_lso_ds = int((m + 1)/lso_down_sample_factor) - 1
+            m_glb_lso_ds = int((m_glb + 1)/lso_down_sample_factor) - 1
+            if (n > 0) then
+                n_lso_ds = int((n + 1)/lso_down_sample_factor) - 1
+                n_glb_lso_ds = int((n_glb + 1)/lso_down_sample_factor) - 1
+            else
+                n_lso_ds = 0; n_glb_lso_ds = 0
+            end if
+            if (p > 0) then
+                p_lso_ds = int((p + 1)/lso_down_sample_factor) - 1
+                p_glb_lso_ds = int((p_glb + 1)/lso_down_sample_factor) - 1
+            else
+                p_lso_ds = 0; p_glb_lso_ds = 0
+            end if
+        end if
+
+        if (lso_filter) call s_initialize_lso_filter_module()
 
         if (bubbles_euler) call s_initialize_bubbles_EE_module()
         if (ib) then
@@ -1116,6 +1273,11 @@ contains
             $:GPU_UPDATE(device='[igr, nb, igr_order]')
         #:endif
 
+        if (lso_filter) then
+            $:GPU_UPDATE(device='[lso_filter, lso_n_passes_x, lso_n_passes_y, lso_n_passes_z]')
+            $:GPU_UPDATE(device='[lso_a_x, lso_a_y, lso_a_z]')
+        end if
+
     end subroutine s_initialize_gpu_vars
 
     !> Finalize and deallocate all simulation sub-modules in reverse initialization order
@@ -1142,6 +1304,7 @@ contains
         if (int_comp > 0) call s_finalize_thinc_module()
         call s_finalize_variables_conversion_module()
         if (grid_geometry == 3) call s_finalize_fftw_module
+        if (lso_filter) call s_finalize_lso_filter_module()
         call s_finalize_mpi_common_module()
         call s_finalize_global_parameters_module()
         call s_finalize_boundary_common_module()

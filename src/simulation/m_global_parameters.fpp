@@ -141,6 +141,11 @@ module m_global_parameters
     integer, allocatable, dimension(:,:,:)       :: neighbor_ranks  !< MPI ranks of neighbors
     $:GPU_DECLARE(create='[pcomm_coords]')
     !> @}
+
+    !> Coarsened-grid dimensions for LSO downsampled output (valid when lso_filter_wrt .and. lso_down_sample_factor > 1); the lso_*
+    !! input parameters are generated into generated_decls.fpp from the registry
+    integer                                       :: m_lso_ds, n_lso_ds, p_lso_ds
+    integer                                       :: m_glb_lso_ds, n_glb_lso_ds, p_glb_lso_ds
     type(mpi_io_var), public                      :: MPI_IO_DATA
     type(mpi_io_ib_var), public                   :: MPI_IO_IB_DATA
     type(mpi_io_airfoil_ib_var), public           :: MPI_IO_airfoil_IB_DATA
@@ -224,6 +229,18 @@ module m_global_parameters
     type(ib_airfoil_grid), dimension(num_ib_airfoils_max) :: ib_airfoil_grids  !< Per-airfoil computed surface grids
 
     $:GPU_DECLARE(create='[ib_airfoil_grids]')
+    !> @}
+
+    !> @name LSO variable-weight Gaussian filter
+    !> @{
+    integer, parameter :: lso_max_passes = 60          !< Maximum number of filter passes (must match Python LSO_MAX_PASSES)
+    real(wp)           :: lso_a_x(5, lso_max_passes)   !< Per-pass stencil coefficients in x
+    real(wp)           :: lso_a_y(5, lso_max_passes)   !< Per-pass stencil coefficients in y
+    real(wp)           :: lso_a_z(5, lso_max_passes)   !< Per-pass stencil coefficients in z
+    real(wp)           :: lso2_a_x(5, lso_max_passes)  !< Stage-2 per-pass stencil coefficients in x
+    real(wp)           :: lso2_a_y(5, lso_max_passes)  !< Stage-2 per-pass stencil coefficients in y
+    real(wp)           :: lso2_a_z(5, lso_max_passes)  !< Stage-2 per-pass stencil coefficients in z
+    $:GPU_DECLARE(create='[lso_a_x, lso_a_y, lso_a_z]')
     !> @}
 
     !> @name Bubble modeling
@@ -515,6 +532,24 @@ contains
         ib_coefficient_of_friction = dflt_real
         ib_state_wrt = .false.
         many_ib_patch_parallelism = .false.
+
+        ! LSO variable-weight Gaussian filter
+        lso_filter = .false.
+        lso_filter_wrt = .false.
+        filter_sigma = dflt_real
+        lso_down_sample_factor = 1
+        lso_n_passes_x = 0
+        lso_n_passes_y = 0
+        lso_n_passes_z = 0
+        lso_a_x = 0.0_wp
+        lso_a_y = 0.0_wp
+        lso_a_z = 0.0_wp
+        lso2_n_passes_x = 0
+        lso2_n_passes_y = 0
+        lso2_n_passes_z = 0
+        lso2_a_x = 0.0_wp
+        lso2_a_y = 0.0_wp
+        lso2_a_z = 0.0_wp
 
         ! Bubble modeling (sim-specific)
         bubble_model = 1

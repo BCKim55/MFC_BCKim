@@ -122,7 +122,10 @@ def compile(casepath: str) -> typing.Tuple[Pack, str]:
     case_dir = os.path.dirname(casepath) if os.path.isfile(casepath) else casepath
     D_dir = os.path.join(case_dir, "D")
 
-    for filepath in list(Path(D_dir).rglob("*.dat")):
+    # The in-situ LSO filter writes its serial output under <case>/lso/D.
+    lso_D_dir = os.path.join(case_dir, "lso", "D")
+
+    for filepath in list(Path(D_dir).rglob("*.dat")) + list(Path(lso_D_dir).rglob("*.dat")):
         short_filepath = str(filepath).replace(f"{case_dir}", "")[1:].replace("\\", "/")
         content = common.file_read(filepath)
 

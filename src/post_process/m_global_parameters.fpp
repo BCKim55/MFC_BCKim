@@ -205,6 +205,8 @@ contains
         num_bc_patches = dflt_int
 
         ! LSO post_process filter
+        lso_filter_wrt = .false.
+        lso_down_sample_factor = 1
         lso_pp_filter = .false.
         lso_filter_sigma_target = dflt_real
         lso_pp_n_passes_x = 0

@@ -364,6 +364,9 @@ CONSTRAINTS = {
     "t_save": {"min": 0},
     "t_step_save": {"min": 1},
     "lso_filter_sigma_target": {"min": 0},
+    "filter_sigma": {"min": 0},
+    "lso_filter_sigma_in": {"min": 0},
+    "lso_down_sample_factor": {"min": 1},
     "t_step_print": {"min": 1},
     "cfl_target": {"min": 0},
     "collision_temporal_resolution": {"min": 1},
@@ -539,6 +542,11 @@ DEPENDENCIES = {
             "requires": ["lso_filter_sigma_target"],
         }
     },
+    "lso_filter_wrt": {
+        "when_true": {
+            "requires": ["lso_filter"],
+        }
+    },
     "cfl_adap_dt": {
         "when_true": {
             "recommends": ["cfl_target"],
@@ -699,14 +707,24 @@ def _load():
     for n in ["parallel_io", "file_per_process", "run_time_info", "prim_vars_wrt", "cons_vars_wrt", "fft_wrt", "ib_state_wrt"]:
         _r(n, LOG, {"output"})
 
-    # LSO (least-squares optimized) Gaussian filter applied by post_process.
-    # The lso_pp_n_passes_* / lso_pp_a_* pass design is derived by the toolchain
-    # (mfc/lso_filter.py) from lso_filter_sigma_target and injected into
-    # post_process.inp; users set only lso_pp_filter and lso_filter_sigma_target.
+    # LSO (least-squares optimized) Gaussian filter: in-situ (simulation, lso_filter)
+    # and post_process (lso_pp_filter). The pass designs (lso_n_passes_*/lso_a_*,
+    # lso2_* stage-2, lso_pp_*) are derived by the toolchain (mfc/lso_filter.py) and
+    # injected into the .inp files; users set only the lso_filter/lso_pp_filter
+    # switches and the physical widths.
+    _r("lso_filter", LOG, {"output"})
+    _r("lso_filter_wrt", LOG, {"output"})
+    _r("filter_sigma", REAL, {"output"})
+    _r("lso_down_sample_factor", INT, {"output"})
+    _r("lso_filter_sigma_in", REAL, {"output"})
     _r("lso_pp_filter", LOG, {"output"})
     _r("lso_filter_sigma_target", REAL, {"output"})
     for d in ["x", "y", "z"]:
+        _r(f"lso_n_passes_{d}", INT, {"output"})
+        _r(f"lso2_n_passes_{d}", INT, {"output"})
         _r(f"lso_pp_n_passes_{d}", INT, {"output"})
+        _r(f"lso_a_{d}(1,1)", REAL, {"output"})
+        _r(f"lso2_a_{d}(1,1)", REAL, {"output"})
         _r(f"lso_pp_a_{d}(1,1)", REAL, {"output"})
     for n in [
         "schlieren_wrt",
@@ -1387,6 +1405,24 @@ _nv(
     "pi_fac",
 )
 _nv(_PRE_POST, "num_fluids", "weno_order", "recon_type", "muscl_order", "mhd", "nb", "igr", "igr_order", "sigR")
+_nv(
+    _SIM,
+    "lso_filter",
+    "filter_sigma",
+    "lso_n_passes_x",
+    "lso_n_passes_y",
+    "lso_n_passes_z",
+    "lso_a_x",
+    "lso_a_y",
+    "lso_a_z",
+    "lso2_n_passes_x",
+    "lso2_n_passes_y",
+    "lso2_n_passes_z",
+    "lso2_a_x",
+    "lso2_a_y",
+    "lso2_a_z",
+)
+_nv(_SIM_POST, "lso_filter_wrt", "lso_down_sample_factor")
 _nv(_ALL, "reactive_burn", "rburn")
 _nv(_PRE_SIM, "ib_airfoil")
 _nv(_PRE_SIM, "stl_models", "num_stl_models")
