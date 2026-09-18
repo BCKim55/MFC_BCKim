@@ -1119,6 +1119,46 @@ contains
 
     end subroutine s_save_lso_pp_closure_data
 
+    !> Closure fields for original data filtered in post_process (lso_pp_filter = T, lso_filter_wrt = F): the stat products in
+    !! q_lso_pp_stat_vf were formed from the unfiltered state and filtered (p_main), the weight is the filtered gas mask.
+    impure subroutine s_save_lso_pp_raw_closure_data(t_step)
+
+        integer, intent(in)             :: t_step
+        type(scalar_field), allocatable :: q_stat_vf(:), q_cls_vf(:)
+        integer                         :: i, j, k, l, n_cls
+
+        if (n_lso_stat <= 0) return
+
+        allocate (q_stat_vf(1:n_lso_stat))
+        do i = 1, n_lso_stat
+            allocate (q_stat_vf(i)%sf(lbound(q_cons_vf(1)%sf, 1):ubound(q_cons_vf(1)%sf, 1),lbound(q_cons_vf(1)%sf, &
+                      & 2):ubound(q_cons_vf(1)%sf, 2),lbound(q_cons_vf(1)%sf, 3):ubound(q_cons_vf(1)%sf, 3)))
+            q_stat_vf(i)%sf = 0._stp
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        q_stat_vf(i)%sf(j, k, l) = q_lso_pp_stat_vf(i)%sf(j, k, l)
+                    end do
+                end do
+            end do
+        end do
+        n_cls = f_lso_n_closure()
+        allocate (q_cls_vf(1:n_cls))
+        do i = 1, n_cls
+            allocate (q_cls_vf(i)%sf(0:m,0:n,0:p))
+        end do
+        call s_compute_lso_closure_fields(q_stat_vf, q_cons_vf, q_lso_pp_w_vf, q_cls_vf)
+        call s_write_lso_closure_fields(q_cls_vf, t_step)
+        do i = 1, n_cls
+            deallocate (q_cls_vf(i)%sf)
+        end do
+        do i = 1, n_lso_stat
+            deallocate (q_stat_vf(i)%sf)
+        end do
+        deallocate (q_cls_vf, q_stat_vf)
+
+    end subroutine s_save_lso_pp_raw_closure_data
+
     !> Emit the closure fields into silo_hdf5_lso_closure/ with ParaView-friendly names. Field order must match
     !! s_compute_lso_closure_fields / f_lso_n_closure.
     impure subroutine s_write_lso_closure_fields(q_cls_vf, t_step)

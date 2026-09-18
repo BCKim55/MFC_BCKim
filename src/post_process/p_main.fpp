@@ -66,6 +66,15 @@ program p_main
                     call s_lso_pp_mask_from_ib(w_vf)
                     have_w = .true.
                 end if
+                ! Original data: the stat products are formed from the unfiltered state (phase-weighted by the gas mask)
+                ! and filtered afterwards, so the closures below are F[rho u u] - F[rho u]F[rho u]/F[rho] and not zero.
+                if (lso_stat_wrt .and. .not. lso_filter_wrt) then
+                    if (have_w) then
+                        call s_compute_lso_pp_stat_fields(q_cons_vf, w_vf)
+                    else
+                        call s_compute_lso_pp_stat_fields(q_cons_vf)
+                    end if
+                end if
                 if (have_w) then
                     call s_apply_lso_pp_filter_masked(q_cons_vf, w_vf)
                 else
@@ -74,7 +83,13 @@ program p_main
                 deallocate (w_vf(1)%sf)
             end block
             call s_reconvert_filtered_to_primitive()
-            if (lso_stat_wrt) call s_compute_lso_pp_stat_fields(q_cons_vf)
+            if (lso_stat_wrt) then
+                if (lso_filter_wrt) then
+                    call s_compute_lso_pp_stat_fields(q_cons_vf)  ! widening of pre-filtered data: products of the widened state
+                else
+                    call s_filter_lso_pp_stat_fields()
+                end if
+            end if
         end if
 
         call s_save_data(t_step, varname, pres, c, H)
@@ -110,10 +125,12 @@ program p_main
                 call s_save_lso_closure_data(t_step)
             else if (lso_filter_wrt .and. lso_stat_wrt .and. lso_pp_filter .and. lso_down_sample_factor > 1) then
                 call s_save_lso_pp_closure_data(t_step)
+            else if (lso_pp_filter .and. lso_stat_wrt .and. .not. lso_filter_wrt) then
+                call s_save_lso_pp_raw_closure_data(t_step)
             else if (proc_rank == 0 .and. t_step == t_step_start) then
                 print '(A)', &
-                    & 'Warning: lso_closure_wrt requires lso_filter_wrt=T and lso_stat_wrt=T ' &
-                    & // '(with lso_pp_filter=T also lso_down_sample_factor>1); closure output skipped.'
+                    & 'Warning: lso_closure_wrt requires lso_stat_wrt=T and lso_filter_wrt=T or lso_pp_filter=T ' &
+                    & // '(both: lso_down_sample_factor>1); closure output skipped.'
             end if
         end if
 

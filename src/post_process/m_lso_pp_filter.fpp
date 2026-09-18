@@ -27,8 +27,8 @@ module m_lso_pp_filter
     private
 
     public :: s_initialize_lso_pp_filter_module, s_finalize_lso_pp_filter_module, s_apply_lso_pp_filter, &
-        & s_compute_lso_pp_stat_fields, q_lso_pp_stat_vf, s_apply_lso_pp_filter_masked, s_lso_pp_mask_from_ib, &
-        & s_compute_lso_closure_fields, f_lso_n_closure, q_lso_pp_w_vf
+        & s_compute_lso_pp_stat_fields, s_filter_lso_pp_stat_fields, q_lso_pp_stat_vf, s_apply_lso_pp_filter_masked, &
+        & s_lso_pp_mask_from_ib, s_compute_lso_closure_fields, f_lso_n_closure, q_lso_pp_w_vf
 
     ! Floor on the normalized-convolution denominator filter(w).
     real(wp), parameter :: lso_w_floor = 1.0e-3_wp
@@ -496,14 +496,17 @@ contains
 
     !> Build the LSO stat product fields from the post_process-filtered conserved state. No IB markers in post_process, so phi_p = 0
     !! and gas_mask = 1 everywhere. CPU loops.
-    impure subroutine s_compute_lso_pp_stat_fields(q_cons_vf)
+    impure subroutine s_compute_lso_pp_stat_fields(q_cons_vf, w_vf)
 
         type(scalar_field), intent(in) :: q_cons_vf(:)
-        integer                        :: i, j, k, l
-        real(wp)                       :: rho, rho_loc
-        real(wp)                       :: mom1, mom2, mom3
-        real(wp)                       :: u1, u2, u3
-        real(wp)                       :: E_loc, ke, e_int, T_loc
+        !> gas mask (1 fluid, 0 solid): products of the ORIGINAL state are phase-weighted
+        type(scalar_field), intent(in), optional :: w_vf(1:1)
+        integer                                  :: i, j, k, l
+        real(wp)                                 :: g
+        real(wp)                                 :: rho, rho_loc
+        real(wp)                                 :: mom1, mom2, mom3
+        real(wp)                                 :: u1, u2, u3
+        real(wp)                                 :: E_loc, ke, e_int, T_loc
         ! Gradient quantities (viscous pass)
         real(wp) :: rho_jm, rho_jp, rho_km, rho_kp, rho_lm, rho_lp
         real(wp) :: u1_jm, u1_jp, u1_km, u1_kp, u1_lm, u1_lp
@@ -785,6 +788,61 @@ contains
             end if
         end if
 
+        ! Phase weighting for products formed from the unfiltered state: F[X] = filter(g X), phi_p = filter(1 - g).
+        if (present(w_vf)) then
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        g = real(w_vf(1)%sf(j, k, l), wp)
+                        q_lso_pp_stat_vf(lso_stat_phi_p_beg)%sf(j, k, l) = real(1._wp - g, stp)
+                        do i = lso_stat_phi_p_end + 1, n_lso_stat
+                            q_lso_pp_stat_vf(i)%sf(j, k, l) = real(real(q_lso_pp_stat_vf(i)%sf(j, k, l), wp)*g, stp)
+                        end do
+                    end do
+                end do
+            end do
+        end if
+
     end subroutine s_compute_lso_pp_stat_fields
+
+    !> Apply the post_process LSO filter to the stat products in place (chunks of sys_size fields, the size of the shared MPI halo
+    !! buffers), through ghost-extended temporaries since q_lso_pp_stat_vf carries no halo.
+    impure subroutine s_filter_lso_pp_stat_fields()
+
+        type(scalar_field), allocatable :: q_tmp_vf(:)
+        integer                         :: i, c, nc, j, k, l
+
+        allocate (q_tmp_vf(1:sys_size))
+        do i = 1, sys_size
+            allocate (q_tmp_vf(i)%sf(-buff_size:m + buff_size,-buff_size:n + buff_size,-buff_size:p + buff_size))
+        end do
+        do c = 1, n_lso_stat, sys_size
+            nc = min(sys_size, n_lso_stat - c + 1)
+            do i = 1, nc
+                do l = 0, p
+                    do k = 0, n
+                        do j = 0, m
+                            q_tmp_vf(i)%sf(j, k, l) = q_lso_pp_stat_vf(c + i - 1)%sf(j, k, l)
+                        end do
+                    end do
+                end do
+            end do
+            call s_apply_lso_pp_filter(q_tmp_vf(1:nc))
+            do i = 1, nc
+                do l = 0, p
+                    do k = 0, n
+                        do j = 0, m
+                            q_lso_pp_stat_vf(c + i - 1)%sf(j, k, l) = q_tmp_vf(i)%sf(j, k, l)
+                        end do
+                    end do
+                end do
+            end do
+        end do
+        do i = 1, sys_size
+            deallocate (q_tmp_vf(i)%sf)
+        end do
+        deallocate (q_tmp_vf)
+
+    end subroutine s_filter_lso_pp_stat_fields
 
 end module m_lso_pp_filter
