@@ -73,7 +73,8 @@ contains
             & lag_pos_prev_wrt, lag_vel_wrt, lag_rad_wrt, lag_rvel_wrt, lag_r0_wrt, lag_rmax_wrt, lag_rmin_wrt, lag_dphidt_wrt, &
             & lag_pres_wrt, lag_mv_wrt, lag_mg_wrt, lag_betaT_wrt, lag_betaC_wrt, alpha_rho_e_wrt, ib_state_wrt, lso_filter_wrt, &
             & lso_down_sample_factor, lso_stat_wrt, lso_pp_filter, lso_closure_wrt, lso_pp_n_passes_x, lso_pp_n_passes_y, &
-            & lso_pp_n_passes_z, lso_pp_a_x, lso_pp_a_y, lso_pp_a_z, lso_R_gas, lso_mu, lso_conductivity
+            & lso_pp_n_passes_z, lso_pp_a_x, lso_pp_a_y, lso_pp_a_z, lso_pp2_n_passes_x, lso_pp2_n_passes_y, lso_pp2_n_passes_z, &
+            & lso_pp2_a_x, lso_pp2_a_y, lso_pp2_a_z, lso_R_gas, lso_mu, lso_conductivity
 
         file_loc = 'post_process.inp'
         inquire (FILE=trim(file_loc), EXIST=file_check)

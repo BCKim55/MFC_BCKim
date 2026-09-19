@@ -230,9 +230,17 @@ module m_global_parameters
     real(wp)           :: lso_pp_a_x(5, lso_max_passes)  !< Per-pass stencil coefficients in x
     real(wp)           :: lso_pp_a_y(5, lso_max_passes)  !< Per-pass stencil coefficients in y
     real(wp)           :: lso_pp_a_z(5, lso_max_passes)  !< Per-pass stencil coefficients in z
-    real(wp)           :: lso_R_gas  !< Specific gas constant [J/(kg*K)] for temperature (default 287.0 = air)
-    real(wp)           :: lso_mu  !< Dynamic viscosity for viscous stat pass (0 = skip)
-    real(wp)           :: lso_conductivity  !< Thermal conductivity for heat flux stat pass (0 = skip)
+    !> Stage-2 pass set, on the same grid: > 0 when the toolchain splits a wide target across two cascades whose variances add to
+    !! the requested width
+    integer  :: lso_pp2_n_passes_x
+    integer  :: lso_pp2_n_passes_y
+    integer  :: lso_pp2_n_passes_z
+    real(wp) :: lso_pp2_a_x(5, lso_max_passes)
+    real(wp) :: lso_pp2_a_y(5, lso_max_passes)
+    real(wp) :: lso_pp2_a_z(5, lso_max_passes)
+    real(wp) :: lso_R_gas         !< Specific gas constant [J/(kg*K)] for temperature (default 287.0 = air)
+    real(wp) :: lso_mu            !< Dynamic viscosity for viscous stat pass (0 = skip)
+    real(wp) :: lso_conductivity  !< Thermal conductivity for heat flux stat pass (0 = skip)
     !> @}
 
     logical :: chem_wrt_Y(1:num_species)
@@ -469,6 +477,12 @@ contains
         lso_pp_a_x = 0.0_wp
         lso_pp_a_y = 0.0_wp
         lso_pp_a_z = 0.0_wp
+        lso_pp2_n_passes_x = 0
+        lso_pp2_n_passes_y = 0
+        lso_pp2_n_passes_z = 0
+        lso_pp2_a_x = 0.0_wp
+        lso_pp2_a_y = 0.0_wp
+        lso_pp2_a_z = 0.0_wp
         lso_R_gas = 287.0_wp
         lso_mu = 0.0_wp
         lso_conductivity = 0.0_wp

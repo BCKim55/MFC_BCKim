@@ -221,7 +221,7 @@ class Case:
         """Compute the post_process LSO filter weights for sigma2 = sqrt(sigma_target^2 - sigma_in^2).
         sigma_in defaults to the in-situ width when lso_filter_wrt = T (coarse-grid input) and to 0
         when the original data is filtered (fine-grid input)."""
-        from .lso_filter import compute_lso_params, lso_namelist_lines
+        from .lso_filter import PP_SPLIT_CELLS, PP_STAGE_MAX_CELLS, compute_lso_params, lso_namelist_lines
 
         p = self.params
         factor = int(p.get("lso_down_sample_factor", 1))
@@ -248,7 +248,25 @@ class Case:
         sigma2 = math.sqrt(sigma_target**2 - sigma_in**2)
 
         grid_note = f" (coarse grid, stride {factor})" if ds > 1 else ""
-        cons.print(f"[cyan]LSO filter (post_process):[/cyan] sigma_in={sigma_in:.4g}, sigma_target={sigma_target:.4g}, sigma2={sigma2:.4g}{grid_note}, computing weights...")
+        head = f"[cyan]LSO filter (post_process):[/cyan] sigma_in={sigma_in:.4g}, sigma_target={sigma_target:.4g}, sigma2={sigma2:.4g}"
+
+        # Gaussian variances add, so a target too wide for one cascade is realised as two
+        # equal stages on the same grid: sigma2^2 = 2*sigma_stage^2.
+        d_min = min(d for d in (dx, dy, dz) if d > 0.0)
+        if sigma2 / d_min > PP_SPLIT_CELLS:
+            sigma_stage = sigma2 / math.sqrt(2.0)
+            if sigma_stage / d_min > PP_STAGE_MAX_CELLS:
+                raise common.MFCException(
+                    f"lso_pp_filter: sigma_2 = {sigma2 / d_min:.1f} cells exceeds what the two post_process "
+                    f"cascades can carry (~{PP_STAGE_MAX_CELLS:.0f} cells each). Filter in situ with "
+                    f"lso_down_sample_factor > 1 so the post_process pass runs on the coarse grid, or lower "
+                    f"lso_filter_sigma_target."
+                )
+            cons.print(f"{head} as two cascades of {sigma_stage:.4g} ({sigma_stage / d_min:.1f} cells each){grid_note}, computing weights...")
+            stage = compute_lso_params(d_p, dx, dy, dz, sigma_stage)
+            return lso_namelist_lines(stage, prefix="lso_pp_") + lso_namelist_lines(stage, prefix="lso_pp2_")
+
+        cons.print(f"{head}{grid_note}, computing weights...")
         self.__warn_lso_width(sigma2, dx, dy, dz)
         lso_params = compute_lso_params(d_p, dx, dy, dz, sigma2)
 

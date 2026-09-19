@@ -673,12 +673,14 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `lso2_a_y`              | Real    | Stage-2 per-pass stencil coefficients in y (auto-computed) |
 | `lso2_a_z`              | Real    | Stage-2 per-pass stencil coefficients in z (auto-computed) |
 | `lso_closure_wrt`       | Logical | post_process: compute Euler–Lagrange closure fields (subgrid stress R_sg, temperature flux Q_T, kinetic-energy flux E_ku, viscous power W_tau_u, subgrid viscous stress R_mu_sg, subgrid heat flux R_lam_sg, plus T_tilde and Favre velocity) from the LSO stat data and write them to silo_hdf5_lso_closure/. Requires `lso_filter_wrt=T` and `lso_stat_wrt=T`; with `lso_pp_filter=T` the stat products are sigma2-filtered first so the closures come out at the widened target width (needs `lso_down_sample_factor>1`) |
-| `lso_pp_filter`         | Logical | Apply an additional LSO filter pass in post_process before writing output, to the in-situ filtered data (`lso_filter_wrt=T`, coarse grid) or to the original data (`lso_filter_wrt=F`, fine grid) |
+| `lso_pp_filter`         | Logical | Apply an additional LSO filter pass in post_process before writing output, to the in-situ filtered data (`lso_filter_wrt=T`, coarse grid) or to the original data (`lso_filter_wrt=F`, fine grid). Targets wider than ~30 cells are realised as two cascades on the same grid, whose variances add to the requested width |
 | `lso_filter_sigma_in`   | Real    | Toolchain-only input (not forwarded to Fortran): Gaussian sigma (physical units) already applied to the input data. Defaults to the in-situ width (`filter_sigma`, or d_p/2) when reading filtered data (`lso_filter_wrt=T`), and to 0 when reading original data (`lso_filter_wrt=F`). The toolchain sizes the post_process pass for sqrt(target² − in²) |
 | `lso_filter_sigma_target`| Real   | Toolchain-only input: target Gaussian sigma (physical units) for the post_process filter; must be &gt; `lso_filter_sigma_in` |
 | `lso_pp_n_passes_x`     | Integer | Number of post-process filter passes in x |
 | `lso_pp_n_passes_y`     | Integer | Number of post-process filter passes in y |
 | `lso_pp_n_passes_z`     | Integer | Number of post-process filter passes in z |
+| `lso_pp2_n_passes_[x,y,z]` | Integer | Auto-computed: stage-2 post-process pass counts, non-zero when a wide target is split across two cascades |
+| `lso_pp2_a_[x,y,z]`     | Real    | Auto-computed: stage-2 post-process per-pass stencil coefficients |
 | `lso_pp_a_x`            | Real    | Post-process per-pass stencil coefficients in x (5 × lso_max_passes) |
 | `lso_pp_a_y`            | Real    | Post-process per-pass stencil coefficients in y (5 × lso_max_passes) |
 | `lso_pp_a_z`            | Real    | Post-process per-pass stencil coefficients in z (5 × lso_max_passes) |

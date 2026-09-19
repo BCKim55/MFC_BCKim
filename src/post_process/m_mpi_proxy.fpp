@@ -86,7 +86,8 @@ contains
             & 'lso_stat_tau_beg', 'lso_stat_tau_end',                          &
             & 'lso_stat_q_beg', 'lso_stat_q_end',                              &
             & 'lso_stat_rhotau_u_beg', 'lso_stat_rhotau_u_end',                      &
-            & 'lso_pp_n_passes_x', 'lso_pp_n_passes_y', 'lso_pp_n_passes_z' ]
+            & 'lso_pp_n_passes_x', 'lso_pp_n_passes_y', 'lso_pp_n_passes_z',                &
+            & 'lso_pp2_n_passes_x', 'lso_pp2_n_passes_y', 'lso_pp2_n_passes_z' ]
             call MPI_BCAST(${VAR}$, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
         #:endfor
 
@@ -162,6 +163,9 @@ contains
         call MPI_BCAST(lso_pp_a_x(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
         call MPI_BCAST(lso_pp_a_y(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
         call MPI_BCAST(lso_pp_a_z(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+        call MPI_BCAST(lso_pp2_a_x(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+        call MPI_BCAST(lso_pp2_a_y(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
+        call MPI_BCAST(lso_pp2_a_z(1, 1), 5*lso_max_passes, mpi_p, 0, MPI_COMM_WORLD, ierr)
 #endif
 
     end subroutine s_mpi_bcast_user_inputs

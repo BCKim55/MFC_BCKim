@@ -6,8 +6,10 @@
 
 !> @brief Post_process-side additional Gaussian filter.
 !!
-!! Applies a second 9-point FIR pass with sigma_2 = sqrt(sigma_target^2 - sigma_in^2)
-!! using the lso_pp_a_* weights from the Python BCD design. Stat product fields are
+!! Applies 9-point FIR passes of total width sigma_2 = sqrt(sigma_target^2 - sigma_in^2)
+!! using the lso_pp_a_* weights from the Python BCD design. Wide targets are split across
+!! two cascades (lso_pp_a_* then lso_pp2_a_*), whose variances add to the requested width;
+!! a single cascade is only well conditioned up to ~40 cells. Stat product fields are
 !! computed afterwards from the filtered state.
 !!
 !! IB-aware normalization: q <- filter(w*q)/filter(w) with w the binary gas mask (original input)
@@ -80,116 +82,80 @@ contains
 
     end subroutine s_finalize_lso_pp_filter_module
 
-    !> Apply the post_process LSO filter to q_cons_vf in place.
+    !> Apply the post_process LSO filter to q_cons_vf in place: the stage-1 pass set, followed by the stage-2 set when the toolchain
+    !! split a wide target across two cascades (a single cascade is only well conditioned up to ~40 cells).
     impure subroutine s_apply_lso_pp_filter(q_cons_vf)
 
         type(scalar_field), intent(inout) :: q_cons_vf(:)
-        integer                           :: i, ipass, j, k, l, nv
+
+        call s_apply_lso_pp_passes(q_cons_vf, 1, lso_pp_n_passes_x, lso_pp_a_x)
+        if (n > 0) call s_apply_lso_pp_passes(q_cons_vf, 2, lso_pp_n_passes_y, lso_pp_a_y)
+        if (p > 0) call s_apply_lso_pp_passes(q_cons_vf, 3, lso_pp_n_passes_z, lso_pp_a_z)
+
+        call s_apply_lso_pp_passes(q_cons_vf, 1, lso_pp2_n_passes_x, lso_pp2_a_x)
+        if (n > 0) call s_apply_lso_pp_passes(q_cons_vf, 2, lso_pp2_n_passes_y, lso_pp2_a_y)
+        if (p > 0) call s_apply_lso_pp_passes(q_cons_vf, 3, lso_pp2_n_passes_z, lso_pp2_a_z)
+
+    end subroutine s_apply_lso_pp_filter
+
+    !> Apply n_passes of the symmetric 9-point stencil along one direction, refreshing the ghost cells before each pass. Gaussian
+    !! variances add, so several pass sets compose to a single wider Gaussian.
+    !! @param q_vf Fields to filter in place
+    !! @param dir Sweep direction (1 = x, 2 = y, 3 = z)
+    !! @param n_passes Number of passes; no-op when < 1
+    !! @param a Per-pass stencil coefficients a(1:5, pass)
+    impure subroutine s_apply_lso_pp_passes(q_vf, dir, n_passes, a)
+
+        type(scalar_field), intent(inout) :: q_vf(:)
+        integer, intent(in)               :: dir, n_passes
+        real(wp), intent(in)              :: a(5, lso_max_passes)
+        integer                           :: i, ipass, j, k, l, nv, sj, sk, sl
         real(wp)                          :: c0, c1, c2, c3, c4
 
-        nv = size(q_cons_vf)
+        if (n_passes < 1) return
 
-        ! x-direction
+        ! Unit stencil offset, so the pass body below is direction-independent
+        sj = 0; sk = 0; sl = 0
+        select case (dir)
+        case (1); sj = 1
+        case (2); sk = 1
+        case (3); sl = 1
+        end select
 
-        call s_lso_pp_filter_ghost_refresh(q_cons_vf, 1)
-        do ipass = 1, lso_pp_n_passes_x
-            c0 = lso_pp_a_x(1, ipass)
-            c1 = lso_pp_a_x(2, ipass)
-            c2 = lso_pp_a_x(3, ipass)
-            c3 = lso_pp_a_x(4, ipass)
-            c4 = lso_pp_a_x(5, ipass)
+        nv = size(q_vf)
+
+        do ipass = 1, n_passes
+            call s_lso_pp_filter_ghost_refresh(q_vf, dir)
+            c0 = a(1, ipass)
+            c1 = a(2, ipass)
+            c2 = a(3, ipass)
+            c3 = a(4, ipass)
+            c4 = a(5, ipass)
             do i = 1, nv
                 do l = 0, p
                     do k = 0, n
                         do j = 0, m
-                            lso_pp_tmp(j, k, l) = c0*real(q_cons_vf(i)%sf(j, k, l), wp) + c1*(real(q_cons_vf(i)%sf(j - 1, k, l), &
-                                       & wp) + real(q_cons_vf(i)%sf(j + 1, k, l), wp)) + c2*(real(q_cons_vf(i)%sf(j - 2, k, l), &
-                                       & wp) + real(q_cons_vf(i)%sf(j + 2, k, l), wp)) + c3*(real(q_cons_vf(i)%sf(j - 3, k, l), &
-                                       & wp) + real(q_cons_vf(i)%sf(j + 3, k, l), wp)) + c4*(real(q_cons_vf(i)%sf(j - 4, k, l), &
-                                       & wp) + real(q_cons_vf(i)%sf(j + 4, k, l), wp))
+                            lso_pp_tmp(j, k, l) = c0*real(q_vf(i)%sf(j, k, l), wp) + c1*(real(q_vf(i)%sf(j - sj, k - sk, l - sl), &
+                                       & wp) + real(q_vf(i)%sf(j + sj, k + sk, l + sl), wp)) + c2*(real(q_vf(i)%sf(j - 2*sj, &
+                                       & k - 2*sk, l - 2*sl), wp) + real(q_vf(i)%sf(j + 2*sj, k + 2*sk, l + 2*sl), &
+                                       & wp)) + c3*(real(q_vf(i)%sf(j - 3*sj, k - 3*sk, l - 3*sl), &
+                                       & wp) + real(q_vf(i)%sf(j + 3*sj, k + 3*sk, l + 3*sl), &
+                                       & wp)) + c4*(real(q_vf(i)%sf(j - 4*sj, k - 4*sk, l - 4*sl), &
+                                       & wp) + real(q_vf(i)%sf(j + 4*sj, k + 4*sk, l + 4*sl), wp))
                         end do
                     end do
                 end do
                 do l = 0, p
                     do k = 0, n
                         do j = 0, m
-                            q_cons_vf(i)%sf(j, k, l) = real(lso_pp_tmp(j, k, l), stp)
+                            q_vf(i)%sf(j, k, l) = real(lso_pp_tmp(j, k, l), stp)
                         end do
                     end do
                 end do
             end do
-            if (ipass < lso_pp_n_passes_x) call s_lso_pp_filter_ghost_refresh(q_cons_vf, 1)
         end do
 
-        ! y-direction (2D/3D)
-        if (n > 0) then
-            call s_lso_pp_filter_ghost_refresh(q_cons_vf, 2)
-            do ipass = 1, lso_pp_n_passes_y
-                c0 = lso_pp_a_y(1, ipass)
-                c1 = lso_pp_a_y(2, ipass)
-                c2 = lso_pp_a_y(3, ipass)
-                c3 = lso_pp_a_y(4, ipass)
-                c4 = lso_pp_a_y(5, ipass)
-                do i = 1, nv
-                    do l = 0, p
-                        do k = 0, n
-                            do j = 0, m
-                                lso_pp_tmp(j, k, l) = c0*real(q_cons_vf(i)%sf(j, k, l), wp) + c1*(real(q_cons_vf(i)%sf(j, k - 1, &
-                                           & l), wp) + real(q_cons_vf(i)%sf(j, k + 1, l), wp)) + c2*(real(q_cons_vf(i)%sf(j, &
-                                           & k - 2, l), wp) + real(q_cons_vf(i)%sf(j, k + 2, l), &
-                                           & wp)) + c3*(real(q_cons_vf(i)%sf(j, k - 3, l), wp) + real(q_cons_vf(i)%sf(j, k + 3, &
-                                           & l), wp)) + c4*(real(q_cons_vf(i)%sf(j, k - 4, l), wp) + real(q_cons_vf(i)%sf(j, &
-                                           & k + 4, l), wp))
-                            end do
-                        end do
-                    end do
-                    do l = 0, p
-                        do k = 0, n
-                            do j = 0, m
-                                q_cons_vf(i)%sf(j, k, l) = real(lso_pp_tmp(j, k, l), stp)
-                            end do
-                        end do
-                    end do
-                end do
-                if (ipass < lso_pp_n_passes_y) call s_lso_pp_filter_ghost_refresh(q_cons_vf, 2)
-            end do
-        end if
-
-        ! z-direction (3D)
-        if (p > 0) then
-            call s_lso_pp_filter_ghost_refresh(q_cons_vf, 3)
-            do ipass = 1, lso_pp_n_passes_z
-                c0 = lso_pp_a_z(1, ipass)
-                c1 = lso_pp_a_z(2, ipass)
-                c2 = lso_pp_a_z(3, ipass)
-                c3 = lso_pp_a_z(4, ipass)
-                c4 = lso_pp_a_z(5, ipass)
-                do i = 1, nv
-                    do l = 0, p
-                        do k = 0, n
-                            do j = 0, m
-                                lso_pp_tmp(j, k, l) = c0*real(q_cons_vf(i)%sf(j, k, l), wp) + c1*(real(q_cons_vf(i)%sf(j, k, &
-                                           & l - 1), wp) + real(q_cons_vf(i)%sf(j, k, l + 1), wp)) + c2*(real(q_cons_vf(i)%sf(j, &
-                                           & k, l - 2), wp) + real(q_cons_vf(i)%sf(j, k, l + 2), &
-                                           & wp)) + c3*(real(q_cons_vf(i)%sf(j, k, l - 3), wp) + real(q_cons_vf(i)%sf(j, k, &
-                                           & l + 3), wp)) + c4*(real(q_cons_vf(i)%sf(j, k, l - 4), wp) + real(q_cons_vf(i)%sf(j, &
-                                           & k, l + 4), wp))
-                            end do
-                        end do
-                    end do
-                    do l = 0, p
-                        do k = 0, n
-                            do j = 0, m
-                                q_cons_vf(i)%sf(j, k, l) = real(lso_pp_tmp(j, k, l), stp)
-                            end do
-                        end do
-                    end do
-                end do
-                if (ipass < lso_pp_n_passes_z) call s_lso_pp_filter_ghost_refresh(q_cons_vf, 3)
-            end do
-        end if
-
-    end subroutine s_apply_lso_pp_filter
+    end subroutine s_apply_lso_pp_passes
 
     !> Fill the interior of w_vf with the binary gas mask from ib_markers: 1 in fluid, 0 inside an immersed body. Used when
     !! post_process filters ORIGINAL data.

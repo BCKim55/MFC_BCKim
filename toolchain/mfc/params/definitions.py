@@ -972,6 +972,10 @@ def _load():
         _r(n, REAL, {"filter"})
     # LSO post-process filter params (post_process target only)
     _r("lso_pp_filter", LOG, {"filter"})
+    for n in ["lso_pp2_n_passes_x", "lso_pp2_n_passes_y", "lso_pp2_n_passes_z"]:
+        _r(n, INT, {"filter"})
+    for n in ["lso_pp2_a_x", "lso_pp2_a_y", "lso_pp2_a_z"]:
+        _r(n, REAL, {"filter"})
     for n in ["lso_pp_n_passes_x", "lso_pp_n_passes_y", "lso_pp_n_passes_z"]:
         _r(n, INT, {"filter"})
     for n in ["lso_pp_a_x", "lso_pp_a_y", "lso_pp_a_z"]:

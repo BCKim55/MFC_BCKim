@@ -17,6 +17,10 @@ import numpy as np
 
 # Must stay in sync with lso_max_passes in the Fortran side.
 LSO_MAX_PASSES: int = 60
+# A single cascade is only well conditioned up to ~40 cells (finite-precision wall at ~45),
+# so post_process splits a wider target across two same-grid stages.
+PP_SPLIT_CELLS: float = 30.0
+PP_STAGE_MAX_CELLS: float = 40.0
 _CONV_TOL: float = 1e-3
 _N_XI: int = 600
 
