@@ -708,6 +708,8 @@ def _load():
     for d in ["x", "y", "z"]:
         _r(f"lso_pp_n_passes_{d}", INT, {"output"})
         _r(f"lso_pp_a_{d}(1,1)", REAL, {"output"})
+        _r(f"lso_pp2_n_passes_{d}", INT, {"output"})
+        _r(f"lso_pp2_a_{d}(1,1)", REAL, {"output"})
     for n in [
         "schlieren_wrt",
         "alpha_wrt",
@@ -1538,6 +1540,12 @@ _nv(
     "lso_pp_a_x",
     "lso_pp_a_y",
     "lso_pp_a_z",
+    "lso_pp2_n_passes_x",
+    "lso_pp2_n_passes_y",
+    "lso_pp2_n_passes_z",
+    "lso_pp2_a_x",
+    "lso_pp2_a_y",
+    "lso_pp2_a_z",
     "output_partial_domain",
     "sim_data",
     "G",

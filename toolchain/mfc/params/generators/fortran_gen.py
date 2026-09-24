@@ -370,7 +370,9 @@ _STRUCT_ROOTS = frozenset({"bc_x", "bc_y", "bc_z", "x_domain", "y_domain", "z_do
 # broadcast only, so these — including the 2D turb_pos/synth_L — are declared and
 # broadcast by hand in m_mpi_proxy.fpp. Skipped here so the scalar classifier does
 # not treat the base name as a missing-registry scalar.
-_MANUAL_ARRAY_RESIDUE = frozenset({"synth_n_waves_per_shell", "synth_k_shell", "synth_amp_shell", "turb_pos", "synth_L", "lso_pp_a_x", "lso_pp_a_y", "lso_pp_a_z"})
+_MANUAL_ARRAY_RESIDUE = frozenset(
+    {"synth_n_waves_per_shell", "synth_k_shell", "synth_amp_shell", "turb_pos", "synth_L", "lso_pp_a_x", "lso_pp_a_y", "lso_pp_a_z", "lso_pp2_a_x", "lso_pp2_a_y", "lso_pp2_a_z"}
+)
 
 # Variables excluded from broadcast generation (derived post-broadcast or non-namelist).
 # muscl_eps was previously excluded here on the assumption that it was derived

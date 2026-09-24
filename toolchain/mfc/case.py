@@ -181,7 +181,7 @@ class Case:
 
     def __get_lso_pp_lines(self) -> str:
         """Compute the post_process LSO filter pass weights for lso_filter_sigma_target."""
-        from .lso_filter import compute_lso_params, lso_namelist_lines
+        from .lso_filter import PP_SPLIT_CELLS, PP_STAGE_MAX_CELLS, compute_lso_params, lso_namelist_lines
 
         p = self.params
         d_p, dx, dy, dz = self.__get_grid_spacing()
@@ -189,6 +189,21 @@ class Case:
         sigma_target = float(p.get("lso_filter_sigma_target", 0.0))
         if sigma_target <= 0.0:
             raise common.MFCException("lso_pp_filter = T requires lso_filter_sigma_target (> 0), the Gaussian filter standard deviation in physical units.")
+
+        # Gaussian variances add, so a target too wide for one cascade is realised as two
+        # equal stages on the same grid: sigma_target^2 = 2*sigma_stage^2.
+        d_min = min(d for d in (dx, dy, dz) if d > 0.0)
+        if sigma_target / d_min > PP_SPLIT_CELLS:
+            sigma_stage = sigma_target / math.sqrt(2.0)
+            if sigma_stage / d_min > PP_STAGE_MAX_CELLS:
+                raise common.MFCException(
+                    f"lso_pp_filter: lso_filter_sigma_target = {sigma_target / d_min:.1f} cells exceeds what the two "
+                    f"post_process cascades can carry (~{PP_STAGE_MAX_CELLS:.0f} cells each). Lower "
+                    f"lso_filter_sigma_target, or coarsen the grid."
+                )
+            cons.print(f"[cyan]LSO filter (post_process):[/cyan] sigma_target={sigma_target:.4g} as two cascades of " f"{sigma_stage:.4g} ({sigma_stage / d_min:.1f} cells each), computing weights...")
+            stage = compute_lso_params(d_p, dx, dy, dz, sigma_stage)
+            return lso_namelist_lines(stage, prefix="lso_pp_") + lso_namelist_lines(stage, prefix="lso_pp2_")
 
         cons.print(f"[cyan]LSO filter (post_process):[/cyan] sigma_target={sigma_target:.4g}, computing weights...")
         self.__warn_lso_width(sigma_target, dx, dy, dz)

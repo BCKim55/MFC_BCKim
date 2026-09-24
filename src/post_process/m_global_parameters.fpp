@@ -98,6 +98,11 @@ module m_global_parameters
     real(wp)           :: lso_pp_a_x(5, lso_max_passes)
     real(wp)           :: lso_pp_a_y(5, lso_max_passes)
     real(wp)           :: lso_pp_a_z(5, lso_max_passes)
+    !> Stage-2 pass set on the same grid: non-zero when the toolchain splits a wide target across two cascades whose variances add
+    !! to the requested width
+    real(wp) :: lso_pp2_a_x(5, lso_max_passes)
+    real(wp) :: lso_pp2_a_y(5, lso_max_passes)
+    real(wp) :: lso_pp2_a_z(5, lso_max_passes)
     !> @}
 
     logical :: bc_io
@@ -213,6 +218,12 @@ contains
         lso_pp_a_x = 0._wp
         lso_pp_a_y = 0._wp
         lso_pp_a_z = 0._wp
+        lso_pp2_n_passes_x = 0
+        lso_pp2_n_passes_y = 0
+        lso_pp2_n_passes_z = 0
+        lso_pp2_a_x = 0._wp
+        lso_pp2_a_y = 0._wp
+        lso_pp2_a_z = 0._wp
 
         chem_params%gamma_method = 1
         chem_params%transport_model = 1

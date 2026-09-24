@@ -758,6 +758,8 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `lso_pp_filter`          | Logical | Apply an LSO Gaussian filter to the conserved variables in the post-process stage |
 | `lso_filter_sigma_target` | Real   | Standard deviation of the target Gaussian filter kernel in physical units |
 | `lso_pp_n_passes_[x,y,z]` | Integer | Number of LSO filter passes per direction (derived by the toolchain; do not set) |
+| `lso_pp2_n_passes_[x,y,z]` | Integer | Stage-2 pass counts, non-zero when a wide target is split across two cascades (derived; do not set) |
+| `lso_pp2_a_[x,y,z]`      | Real    | Stage-2 per-pass LSO stencil coefficients (derived by the toolchain; do not set) |
 | `lso_pp_a_[x,y,z]`       | Real    | Per-pass LSO stencil coefficients per direction (derived by the toolchain; do not set) |
 | `fd_order`              | Integer | Order of finite differences for computing the vorticity and the numerical Schlieren function [1,2,4] |
 | `schlieren_alpha(i)`    | Real    | Intensity of the numerical Schlieren computed via `alpha(i)` |
