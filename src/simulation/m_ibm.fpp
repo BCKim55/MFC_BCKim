@@ -669,26 +669,26 @@ contains
                             ghost_points_in(local_idx)%z_periodicity = zp
                             ghost_points_in(local_idx)%slip = patch_ib(neighborhood_patch_id)%slip
 
-                            if ((x_cc(i) - dx(i)) < glb_bounds(1)%beg) then
+                            if ((x_cc(i) - dx(i)) < glb_bounds(1)%beg .and. ib_bc_x%beg /= BC_PERIODIC) then
                                 ghost_points_in(local_idx)%DB(1) = -1
-                            else if ((x_cc(i) + dx(i)) > glb_bounds(1)%end) then
+                            else if ((x_cc(i) + dx(i)) > glb_bounds(1)%end .and. ib_bc_x%beg /= BC_PERIODIC) then
                                 ghost_points_in(local_idx)%DB(1) = 1
                             else
                                 ghost_points_in(local_idx)%DB(1) = 0
                             end if
 
-                            if ((y_cc(j) - dy(j)) < glb_bounds(2)%beg) then
+                            if ((y_cc(j) - dy(j)) < glb_bounds(2)%beg .and. ib_bc_y%beg /= BC_PERIODIC) then
                                 ghost_points_in(local_idx)%DB(2) = -1
-                            else if ((y_cc(j) + dy(j)) > glb_bounds(2)%end) then
+                            else if ((y_cc(j) + dy(j)) > glb_bounds(2)%end .and. ib_bc_y%beg /= BC_PERIODIC) then
                                 ghost_points_in(local_idx)%DB(2) = 1
                             else
                                 ghost_points_in(local_idx)%DB(2) = 0
                             end if
 
                             if (p /= 0) then
-                                if ((z_cc(k) - dz(k)) < glb_bounds(3)%beg) then
+                                if ((z_cc(k) - dz(k)) < glb_bounds(3)%beg .and. ib_bc_z%beg /= BC_PERIODIC) then
                                     ghost_points_in(local_idx)%DB(3) = -1
-                                else if ((z_cc(k) + dz(k)) > glb_bounds(3)%end) then
+                                else if ((z_cc(k) + dz(k)) > glb_bounds(3)%end .and. ib_bc_z%beg /= BC_PERIODIC) then
                                     ghost_points_in(local_idx)%DB(3) = 1
                                 else
                                     ghost_points_in(local_idx)%DB(3) = 0
