@@ -614,6 +614,9 @@ contains
                 call s_wrap_periodic_ibs()  ! wraps the positions of IBs to the local proc
                 call s_handoff_ib_ownership()  ! recomputes which ranks own which IBs and communicate to neighbors
             else if (ib_state_wrt) then
+                ! The IB ghost-cell correction updates interior cells only, so the primitive halo is stale here;
+                ! the force stencil at cells next to a rank boundary or periodic face would read it. Refresh first.
+                call s_populate_variables_buffers(bc_type, q_prim_vf, pb_ts(1)%sf, mv_ts(1)%sf, q_T_sf)
                 call s_compute_ib_forces(q_prim_vf, fluid_pp)
             end if
         end if
@@ -1016,7 +1019,11 @@ contains
 
         call nvtxStartRange("PROPAGATE-IMMERSED-BOUNDARIES")
 
-        if (moving_immersed_boundary_flag) call s_compute_ib_forces(q_prim_vf, fluid_pp)
+        if (moving_immersed_boundary_flag) then
+            ! same halo refresh as the ib_state path
+            call s_populate_variables_buffers(bc_type, q_prim_vf, pb_ts(1)%sf, mv_ts(1)%sf, q_T_sf)
+            call s_compute_ib_forces(q_prim_vf, fluid_pp)
+        end if
 
         $:GPU_PARALLEL_LOOP(private='[i, gbl_id]', copyin='[s]')
         do i = 1, num_ibs
