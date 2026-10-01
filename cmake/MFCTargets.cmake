@@ -57,11 +57,20 @@ exit 0
         add_dependencies(${ARGS_TARGET} ${ARGS_TARGET}_lib)
         target_compile_options(${ARGS_TARGET} PRIVATE -Minline=lib:${ARGS_TARGET}_lib,except:f_is_default,except:s_compute_dt,except:my_inquire,except:s_mpi_abort,except:s_mpi_barrier,except:s_prohibit_abort,except:s_int_to_str,except:s_associate_cbc_coefficients_pointers)
 
-        # Exclude m_start_up and m_cbc from cross-file inlining: these are
-        # initialization/boundary code that trigger NVHPC 25.x fort2 ICE when
-        # too many functions are cross-inlined into them. GPU hot-path files
+        # Exclude these files from cross-file inlining. GPU hot-path files
         # (m_rhs, m_riemann_solvers, m_viscous, m_weno, etc.) keep full IPO.
-        foreach(_no_inline_file m_start_up m_cbc)
+        #
+        #   m_start_up, m_cbc      initialization/boundary code that trigger
+        #                          NVHPC 25.x fort2 ICEs when too many functions
+        #                          are cross-inlined into them.
+        #   m_pressure_relaxation  worse than an ICE, because it compiles: inlining
+        #                          the equation-of-state chain (s_phase_coefficients
+        #                          -> s_eos_coefficients -> s_reference_curve,
+        #                          s_phase_internal_energy, f_pressure) into the
+        #                          six-equation relaxation kernel silently drops the
+        #                          internal-energy update, leaving alpha and
+        #                          alpha_rho correct and int_en zero.
+        foreach(_no_inline_file m_start_up m_cbc m_pressure_relaxation)
             set_source_files_properties(
                 "${CMAKE_BINARY_DIR}/fypp/${ARGS_TARGET}/${_no_inline_file}.fpp.f90"
                 TARGET_DIRECTORY ${ARGS_TARGET}
@@ -203,7 +212,31 @@ exit 0
                         -fopenmp-assume-threads-oversubscription
                         -fopenmp-assume-teams-oversubscription
                         -fopenmp-assume-no-nested-parallelism)
-                    target_link_options(${a_target} PRIVATE -fopenmp --offload-arch=gfx90a -flto-partitions=${MFC_BUILD_JOBS})
+                    # attributor-max-pi-accesses: amdflang generates device code for the WHOLE
+                    # image at link time, and once the image carries enough target regions the
+                    # device link's Attributor exceeds its AAPointerInfo access cap on a
+                    # heavily-shared object. Pointer information then goes pessimistic and
+                    # OpenMPOpt's __kmpc_parallel cleanup fails module-wide: UNTOUCHED kernels
+                    # regenerate with 2.4-4.5x worse ISA (register spills, +512 B LDS in every
+                    # kernel) whenever ANY kernel is added or removed anywhere in the code.
+                    # Raising the cap restores full pointer precision for the whole image and
+                    # makes kernel quality independent of unrelated edits, at the price of a
+                    # longer device link. See docs/documentation/gpuParallelization.md
+                    # ("AMD flang known issues") for the failure signature.
+                    target_link_options(${a_target} PRIVATE -fopenmp --offload-arch=gfx90a -flto-partitions=${MFC_BUILD_JOBS}
+                        "SHELL:-Xoffload-linker -mllvm -Xoffload-linker -attributor-max-pi-accesses=16384")
+
+                    # Weak device stubs for symbols AFAR 24.3's device flang runtime
+                    # leaves undefined. Built by the drop's clang so the bitcode
+                    # matches the device LTO link.
+                    get_filename_component(_flang_bin "${CMAKE_Fortran_COMPILER}" DIRECTORY)
+                    find_program(MFC_AMDCLANG NAMES amdclang clang HINTS "${_flang_bin}" NO_DEFAULT_PATH REQUIRED)
+                    set(_rt_stubs_src "${CMAKE_SOURCE_DIR}/cmake/amdflang_device_stubs.c")
+                    set(_rt_stubs "${CMAKE_CURRENT_BINARY_DIR}/${a_target}_amdflang_device_stubs.o")
+                    add_custom_command(OUTPUT "${_rt_stubs}"
+                        COMMAND "${MFC_AMDCLANG}" -O2 -fopenmp --offload-arch=gfx90a -c "${_rt_stubs_src}" -o "${_rt_stubs}"
+                        DEPENDS "${_rt_stubs_src}")
+                    target_sources(${a_target} PRIVATE "${_rt_stubs}")
                 endif()
             endif()
 
@@ -269,15 +302,24 @@ exit 0
                         PRIVATE -DFRONTIER_UNIFIED)
                 endif()
 
-		        find_library(HIP_LIB amdhip64
-                    HINTS "$ENV{OLCF_AFAR_ROOT}/lib" "$ENV{OLCF_AFAR_ROOT}/lib/llvm/lib" REQUIRED)
+                # Search the AFAR drop first: the ROCm module also ships
+                # libhipfort-amdgcn.a, and HINTS lose to CMAKE_PREFIX_PATH, which
+                # would pair the drop's .mod files with another flang's archive.
+                find_library(HIP_LIB amdhip64
+                    PATHS "$ENV{OLCF_AFAR_ROOT}/lib" "$ENV{OLCF_AFAR_ROOT}/lib/llvm/lib"
+                    NO_DEFAULT_PATH)
+                find_library(HIP_LIB amdhip64 REQUIRED)
                 find_library(HIPFORT_AMDGCN_LIB hipfort-amdgcn
-                    HINTS "$ENV{OLCF_AFAR_ROOT}/lib" "$ENV{OLCF_AFAR_ROOT}/lib/llvm/lib" REQUIRED)
-                # The hipfort module dir moved to lib/llvm/include in newer AFAR
-                # (therock) drops; keep the classic path for Frontier's layout.
+                    PATHS "$ENV{OLCF_AFAR_ROOT}/lib/llvm/lib/fortran/flang"
+                          "$ENV{OLCF_AFAR_ROOT}/lib" "$ENV{OLCF_AFAR_ROOT}/lib/llvm/lib"
+                    NO_DEFAULT_PATH)
+                find_library(HIPFORT_AMDGCN_LIB hipfort-amdgcn REQUIRED)
+                # The hipfort module dir moved to lib/llvm/include in AFAR 23.x and
+                # to lib/llvm/include/fortran/flang in 24.3; keep all three layouts.
                 target_include_directories(${a_target} PRIVATE
                     "$ENV{OLCF_AFAR_ROOT}/include/hipfort/amdgcn"
-                    "$ENV{OLCF_AFAR_ROOT}/lib/llvm/include/hipfort/amdgcn")
+                    "$ENV{OLCF_AFAR_ROOT}/lib/llvm/include/hipfort/amdgcn"
+                    "$ENV{OLCF_AFAR_ROOT}/lib/llvm/include/fortran/flang/hipfort/amdgcn")
                 target_link_libraries(${a_target} PRIVATE
                     ${HIP_LIB} ${HIPFORT_AMDGCN_LIB})
 

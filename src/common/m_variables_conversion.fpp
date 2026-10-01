@@ -9,6 +9,7 @@
 module m_variables_conversion
 
     use m_derived_types
+    use m_eos
     use m_global_parameters
     use m_mpi_proxy
     use m_helper_basic
@@ -25,8 +26,9 @@ module m_variables_conversion
         & s_convert_mixture_to_mixture_variables, s_convert_species_to_mixture_variables, &
         & s_convert_species_to_mixture_variables_kernel, s_convert_conservative_to_primitive_variables, &
         & s_convert_primitive_to_conservative_variables, s_convert_primitive_to_flux_variables, s_compute_pressure, &
-        & s_compute_species_fraction, s_compute_speed_of_sound, s_compute_fast_magnetosonic_speed, &
-        & s_finalize_variables_conversion_module, gammas, gs_min, pi_infs, ps_inf, cvs, qvs, qvps
+        & s_compute_species_fraction, s_compute_mixture_coefficients, s_compute_energy, s_compute_speed_of_sound, &
+        & s_compute_mixture_coefficients_dt, s_compute_speed_of_sound_avg, s_compute_fast_magnetosonic_speed, f_elastic_energy, &
+        & f_hypoelastic_energy, s_finalize_variables_conversion_module, gammas, isentrope_n, pi_infs, isentrope_B, cvs, qvs, qvps
 
     real(wp), allocatable, dimension(:)   :: Gs_vc
     integer, allocatable, dimension(:)    :: bubrs_vc
@@ -44,7 +46,6 @@ module m_variables_conversion
     real(wp), allocatable, dimension(:,:,:), public :: rho_sf     !< Scalar density function
     real(wp), allocatable, dimension(:,:,:), public :: gamma_sf   !< Scalar sp. heat ratio function
     real(wp), allocatable, dimension(:,:,:), public :: pi_inf_sf  !< Scalar liquid stiffness function
-    real(wp), allocatable, dimension(:,:,:), public :: qv_sf      !< Scalar liquid energy reference function
 
 contains
 
@@ -68,55 +69,43 @@ contains
     end subroutine s_convert_to_mixture_variables
 
     !> Compute the pressure from the appropriate equation of state
-    subroutine s_compute_pressure(energy, alf, dyn_p, pi_inf, gamma, rho, qv, rhoYks, pres, T, stress, mom, G, pres_mag)
+    subroutine s_compute_pressure(energy, alf, dyn_p, pi_inf, gamma, rho, qv, rhoYks, pres, T, E_e_in, pres_mag)
 
         $:GPU_ROUTINE(function_name='s_compute_pressure',parallelism='[seq]', cray_noinline=True)
 
-        real(stp), intent(in)           :: energy, alf
-        real(wp), intent(in)            :: dyn_p
-        real(wp), intent(in)            :: pi_inf, gamma, rho, qv
-        real(wp), intent(out)           :: pres
-        real(wp), intent(inout)         :: T
-        real(stp), intent(in), optional :: stress, mom
-        real(wp), intent(in), optional  :: G, pres_mag
+        real(stp), intent(in)          :: energy, alf
+        real(wp), intent(in)           :: dyn_p
+        real(wp), intent(in)           :: pi_inf, gamma, rho, qv
+        real(wp), intent(out)          :: pres
+        real(wp), intent(inout)        :: T
+        real(wp), intent(in), optional :: E_e_in, pres_mag
 
         ! Chemistry
         real(wp), dimension(1:num_species), intent(in) :: rhoYks
         real(wp), dimension(1:num_species)             :: Y_rs
-        real(wp)                                       :: E_e
+        real(wp)                                       :: e_int
         real(wp)                                       :: e_Per_Kg, Pdyn_Per_Kg
         real(wp)                                       :: T_guess
-        integer                                        :: s  !< Generic loop iterator
         #:if not chemistry
-            ! Depending on model_eqns and bubbles_euler, the appropriate procedure for computing pressure is targeted by the
-            ! procedure pointer
-
+            ! What is the internal energy? The magnetic, elastic and kinetic parts are model
+            ! bookkeeping rather than equation of state, so they come off here and the inversion runs once.
             if (mhd) then
-                ! MHD pressure: subtract magnetic pressure from total energy
-                pres = (energy - dyn_p - pi_inf - qv - pres_mag)/gamma
+                ! MHD: the magnetic energy is not an equation-of-state term
+                e_int = energy - dyn_p - pres_mag
             else if (bubbles_euler .neqv. .true.) then
-                ! Gamma/pi_inf model or five-equation model (Allaire et al. JCP 2002): p from mixture EOS
-                pres = (energy - dyn_p - pi_inf - qv)/gamma
+                ! Gamma/pi_inf model or five-equation model (Allaire et al. JCP 2002)
+                e_int = energy - dyn_p
             else
-                ! Bubble-augmented pressure with void fraction correction
-                pres = ((energy - dyn_p)/(1._wp - alf) - pi_inf - qv)/gamma
+                ! Bubble-augmented; qv comes off before the division rather than being scaled by it
+                e_int = (energy - dyn_p - qv)/(1._wp - alf) + qv
             end if
 
-            if (hypoelasticity .and. present(G)) then
+            if (hypoelasticity .and. present(E_e_in)) then
                 ! Subtract elastic strain energy before computing pressure (hypoelastic model)
-                E_e = 0._wp
-                do s = eqn_idx%stress%beg, eqn_idx%stress%end
-                    if (G > 0) then
-                        E_e = E_e + ((stress/rho)**2._wp)/(4._wp*G)
-                        ! Double for shear stresses
-                        if (any(s == shear_indices)) then
-                            E_e = E_e + ((stress/rho)**2._wp)/(4._wp*G)
-                        end if
-                    end if
-                end do
-
-                pres = (energy - 0.5_wp*(mom**2._wp)/rho - pi_inf - qv - E_e)/gamma
+                e_int = energy - dyn_p - E_e_in
             end if
+
+            pres = f_pressure(e_int, gamma, pi_inf, qv)
         #:else
             ! Reacting mixture pressure from temperature and species
             Y_rs(:) = rhoYks(:)/rho
@@ -155,7 +144,6 @@ contains
             rho_sf(i, j, k) = rho
             gamma_sf(i, j, k) = gamma
             pi_inf_sf(i, j, k) = pi_inf
-            qv_sf(i, j, k) = qv
         end if
 
     end subroutine s_convert_mixture_to_mixture_variables
@@ -189,7 +177,6 @@ contains
             rho_sf(k, l, r) = rho
             gamma_sf(k, l, r) = gamma
             pi_inf_sf(k, l, r) = pi_inf
-            qv_sf(k, l, r) = qv
         end if
 
     end subroutine s_convert_species_to_mixture_variables
@@ -220,29 +207,16 @@ contains
         if (present(G_K)) G_K = 0._wp
 
         ! Constrain partial densities and volume fractions within physical bounds
-        if (num_fluids == 1 .and. bubbles_euler) then
-            rho_K = alpha_rho_K(1)
-            gamma_K = gammas(1)
-            pi_inf_K = pi_infs(1)
-            qv_K = qvs(1)
-        else
-            if (mpp_lim) then
-                alpha_K_sum = 0._wp
-                do i = 1, num_fluids
-                    alpha_rho_K(i) = max(0._wp, alpha_rho_K(i))
-                    alpha_K(i) = min(max(0._wp, alpha_K(i)), 1._wp)
-                    alpha_K_sum = alpha_K_sum + alpha_K(i)
-                end do
-                alpha_K = alpha_K/max(alpha_K_sum, sgm_eps)
-            end if
-            rho_K = 0._wp; gamma_K = 0._wp; pi_inf_K = 0._wp; qv_K = 0._wp
+        if (mpp_lim) then
+            alpha_K_sum = 0._wp
             do i = 1, num_fluids
-                rho_K = rho_K + alpha_rho_K(i)
-                gamma_K = gamma_K + alpha_K(i)*gammas(i)
-                pi_inf_K = pi_inf_K + alpha_K(i)*pi_infs(i)
-                qv_K = qv_K + alpha_rho_K(i)*qvs(i)
+                alpha_rho_K(i) = max(0._wp, alpha_rho_K(i))
+                alpha_K(i) = min(max(0._wp, alpha_K(i)), 1._wp)
+                alpha_K_sum = alpha_K_sum + alpha_K(i)
             end do
+            alpha_K = alpha_K/max(alpha_K_sum, sgm_eps)
         end if
+        call s_compute_mixture_coefficients(alpha_rho_K, alpha_K, rho_K, gamma_K, pi_inf_K, qv_K)
 
         if (present(G_K)) then
             G_K = 0._wp
@@ -291,26 +265,14 @@ contains
         $:GPU_ENTER_DATA(copyin='[is1b, is1e, is2b, is2e, is3b, is3e]')
         $:GPU_UPDATE(device='[enforce_density_floor_vc, preserve_qbmm_number_vc, lagrange_beta_index_vc]')
 
-        @:ALLOCATE(gammas (1:num_fluids))
-        @:ALLOCATE(gs_min (1:num_fluids))
-        @:ALLOCATE(pi_infs(1:num_fluids))
-        @:ALLOCATE(ps_inf(1:num_fluids))
-        @:ALLOCATE(cvs    (1:num_fluids))
-        @:ALLOCATE(qvs    (1:num_fluids))
-        @:ALLOCATE(qvps    (1:num_fluids))
         @:ALLOCATE(Gs_vc     (1:num_fluids))
+        @:ALLOCATE(fluid_k_therm(1:num_fluids))
 
         do i = 1, num_fluids
-            gammas(i) = fluid_pp(i)%gamma
-            gs_min(i) = 1.0_wp/gammas(i) + 1.0_wp
-            pi_infs(i) = fluid_pp(i)%pi_inf
             Gs_vc(i) = fluid_pp(i)%G
-            ps_inf(i) = pi_infs(i)/(1.0_wp + gammas(i))
-            cvs(i) = fluid_pp(i)%cv
-            qvs(i) = fluid_pp(i)%qv
-            qvps(i) = fluid_pp(i)%qvp
+            fluid_k_therm(i) = fluid_pp(i)%k_therm
         end do
-        $:GPU_UPDATE(device='[gammas, gs_min, pi_infs, ps_inf, cvs, qvs, qvps, Gs_vc]')
+        $:GPU_UPDATE(device='[Gs_vc, fluid_k_therm, heat_conduction]')
 
         @:ALLOCATE(Res_vc(1:2, 1:max(1, Re_size_max)))
         Res_vc = dflt_real
@@ -339,18 +301,15 @@ contains
                     allocate (rho_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,-buff_size:p + buff_size))
                     allocate (gamma_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,-buff_size:p + buff_size))
                     allocate (pi_inf_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,-buff_size:p + buff_size))
-                    allocate (qv_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,-buff_size:p + buff_size))
                 else
                     allocate (rho_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,0:0))
                     allocate (gamma_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,0:0))
                     allocate (pi_inf_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,0:0))
-                    allocate (qv_sf(-buff_size:m + buff_size,-buff_size:n + buff_size,0:0))
                 end if
             else
                 allocate (rho_sf(-buff_size:m + buff_size,0:0,0:0))
                 allocate (gamma_sf(-buff_size:m + buff_size,0:0,0:0))
                 allocate (pi_inf_sf(-buff_size:m + buff_size,0:0,0:0))
-                allocate (qv_sf(-buff_size:m + buff_size,0:0,0:0))
             end if
         end if
 
@@ -434,7 +393,7 @@ contains
         #:if USING_AMD and not MFC_CASE_OPTIMIZATION
             real(wp), dimension(3) :: alpha_K, alpha_rho_K
             real(wp), dimension(3) :: nRtmp
-            real(wp)               :: rhoYks(1:10)
+            real(wp)               :: rhoYks(1:${AMD_NUM_SPECIES_MAX}$)
         #:else
             real(wp), dimension(num_fluids) :: alpha_K, alpha_rho_K
             real(wp), dimension(nb)         :: nRtmp
@@ -444,6 +403,7 @@ contains
         real(wp)               :: rho_K, gamma_K, pi_inf_K, qv_K, dyn_pres_K
         real(wp)               :: vftmp, nbub_sc
         real(wp)               :: G_K
+        real(wp)               :: solid_partial_density
         real(wp)               :: pres
         integer                :: i, j, k, l               !< Generic loop iterators
         real(wp)               :: T
@@ -459,8 +419,8 @@ contains
         integer                :: iter                     !< Newton-Raphson iteration counter
 
         $:GPU_PARALLEL_LOOP(collapse=3, private='[alpha_K, alpha_rho_K, Re_K, nRtmp, rho_K, gamma_K, pi_inf_K, qv_K, dyn_pres_K, &
-                            & rhoYks, B, pres, vftmp, nbub_sc, G_K, T, pres_mag, Ga, B2, m2, S, W, dW, E, D, f, dGa_dW, dp_dW, &
-                            & df_dW, iter]')
+                            & rhoYks, B, pres, vftmp, nbub_sc, G_K, solid_partial_density, T, pres_mag, Ga, B2, m2, S, W, dW, E, &
+                            & D, f, dGa_dW, dp_dW, df_dW, iter]')
         do l = ibounds(3)%beg, ibounds(3)%end
             do k = ibounds(2)%beg, ibounds(2)%end
                 do j = ibounds(1)%beg, ibounds(1)%end
@@ -626,6 +586,8 @@ contains
 
                     if (chemistry) then
                         q_T_sf%sf(j, k, l) = T
+                    else if (heat_conduction) then
+                        q_T_sf%sf(j, k, l) = f_mixture_temperature(alpha_rho_K, pres, gamma_K, pi_inf_K)
                     end if
 
                     if (bubbles_euler) then
@@ -679,20 +641,26 @@ contains
                         end do
                     end if
 
+                    if (cont_damage) then
+                        ! Recover D = U_D/m_s (damageable-solid partial mass), clamped to [0, 1]
+                        solid_partial_density = 0._wp
+                        $:GPU_LOOP(parallelism='[seq]')
+                        do i = 1, num_fluids
+                            if (Gs_vc(i) > verysmall) then
+                                solid_partial_density = solid_partial_density + qK_cons_vf(eqn_idx%cont%beg + i - 1)%sf(j, k, l)
+                            end if
+                        end do
+                        qK_prim_vf(eqn_idx%damage)%sf(j, k, l) = min(max(qK_cons_vf(eqn_idx%damage)%sf(j, k, &
+                                   & l)/max(solid_partial_density, verysmall), 0._wp), 1._wp)
+                    end if
+
                     if (hypoelasticity) then
-                        if (cont_damage) G_K = G_K*max((1._wp - qK_cons_vf(eqn_idx%damage)%sf(j, k, l)), 0._wp)
+                        ! Elastic energy uses the undamaged modulus; tau^2/(4 G0 (1-D)) diverges as D -> 1
                         $:GPU_LOOP(parallelism='[seq]')
                         do i = eqn_idx%stress%beg, eqn_idx%stress%end
-                            ! Elastic energy subtraction (guard skips when G near zero from alpha undershoot)
-                            if (G_K > verysmall) then
-                                qK_prim_vf(eqn_idx%E)%sf(j, k, l) = qK_prim_vf(eqn_idx%E)%sf(j, k, l) - ((qK_prim_vf(i)%sf(j, k, &
-                                           & l)**2._wp)/max(4._wp*G_K, verysmall))/gamma_K
-                                ! Double for shear stresses
-                                if (any(i == shear_indices)) then
-                                    qK_prim_vf(eqn_idx%E)%sf(j, k, l) = qK_prim_vf(eqn_idx%E)%sf(j, k, l) - ((qK_prim_vf(i)%sf(j, &
-                                               & k, l)**2._wp)/max(4._wp*G_K, verysmall))/gamma_K
-                                end if
-                            end if
+                            qK_prim_vf(eqn_idx%E)%sf(j, k, l) = qK_prim_vf(eqn_idx%E)%sf(j, k, &
+                                       & l) - f_elastic_energy(real(qK_prim_vf(i)%sf(j, k, l), wp), G_K, &
+                                       & any(i == shear_indices))/gamma_K
                         end do
                     end if
 
@@ -706,8 +674,6 @@ contains
                     if (surface_tension) then
                         qK_prim_vf(eqn_idx%c)%sf(j, k, l) = qK_cons_vf(eqn_idx%c)%sf(j, k, l)
                     end if
-
-                    if (cont_damage) qK_prim_vf(eqn_idx%damage)%sf(j, k, l) = qK_cons_vf(eqn_idx%damage)%sf(j, k, l)
 
                     if (hyper_cleaning) qK_prim_vf(eqn_idx%psi)%sf(j, k, l) = qK_cons_vf(eqn_idx%psi)%sf(j, k, l)
                     if (bubbles_lagrange .and. lagrange_beta_index_vc > 0) then
@@ -731,11 +697,13 @@ contains
         real(wp)                         :: rho
         real(wp)                         :: gamma
         real(wp)                         :: pi_inf
+        real(wp)                         :: pres_i, alpha_i, alpha_rho_i, e_i
         real(wp)                         :: qv
         real(wp)                         :: dyn_pres
         real(wp)                         :: nbub, R3tmp
         real(wp), dimension(nb)          :: Rtmp
         real(wp)                         :: G
+        real(wp)                         :: solid_partial_density
         real(wp), dimension(2)           :: Re_K
         integer                          :: i, j, k, l  !< Generic loop iterators
         real(wp), dimension(num_species) :: Ys
@@ -864,18 +832,20 @@ contains
                             ! Five-equation model (Allaire et al. JCP 2002): E = Gamma*p + 0.5*rho*|u|^2 + pi_inf + qv
                             q_cons_vf(eqn_idx%E)%sf(j, k, l) = gamma*q_prim_vf(eqn_idx%E)%sf(j, k, l) + dyn_pres + pi_inf + qv
                         else
-                            ! Bubble-augmented energy with void fraction correction
+                            ! Bubble-augmented energy; qv is an energy density and is not diluted
                             q_cons_vf(eqn_idx%E)%sf(j, k, l) = dyn_pres + (1._wp - q_prim_vf(eqn_idx%alf)%sf(j, k, &
-                                      & l))*(gamma*q_prim_vf(eqn_idx%E)%sf(j, k, l) + pi_inf)
+                                      & l))*(gamma*q_prim_vf(eqn_idx%E)%sf(j, k, l) + pi_inf) + qv
                         end if
                     end if
 
                     ! Six-equation model (Saurel et al. JCP 2009): compute per-phase internal energies
                     if (model_eqns == model_eqns_6eq) then
                         do i = 1, num_fluids
-                            q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) = q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, &
-                                      & l)*(gammas(i)*q_prim_vf(eqn_idx%E)%sf(j, k, &
-                                      & l) + pi_infs(i)) + q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)*qvs(i)
+                            pres_i = q_prim_vf(eqn_idx%E)%sf(j, k, l)
+                            alpha_i = q_cons_vf(i + eqn_idx%adv%beg - 1)%sf(j, k, l)
+                            alpha_rho_i = q_cons_vf(i + eqn_idx%cont%beg - 1)%sf(j, k, l)
+                            call s_phase_internal_energy(pres_i, alpha_i, alpha_rho_i, i, e_i)
+                            q_cons_vf(i + eqn_idx%int_en%beg - 1)%sf(j, k, l) = e_i
                         end do
                     end if
 
@@ -922,7 +892,7 @@ contains
                     end if
 
                     if (hypoelasticity) then
-                        if (cont_damage) G = G*max((1._wp - q_prim_vf(eqn_idx%damage)%sf(j, k, l)), 0._wp)
+                        ! Elastic energy uses the undamaged modulus
                         do i = eqn_idx%stress%beg, eqn_idx%stress%end
                             ! Elastic energy addition (guard skips when G near zero from alpha undershoot)
                             if (G > verysmall) then
@@ -941,7 +911,16 @@ contains
                         q_cons_vf(eqn_idx%c)%sf(j, k, l) = q_prim_vf(eqn_idx%c)%sf(j, k, l)
                     end if
 
-                    if (cont_damage) q_cons_vf(eqn_idx%damage)%sf(j, k, l) = q_prim_vf(eqn_idx%damage)%sf(j, k, l)
+                    if (cont_damage) then
+                        ! U_D = m_s*D (damageable-solid partial mass)
+                        solid_partial_density = 0._wp
+                        do i = 1, num_fluids
+                            if (fluid_pp(i)%G > verysmall) then
+                                solid_partial_density = solid_partial_density + q_prim_vf(eqn_idx%cont%beg + i - 1)%sf(j, k, l)
+                            end if
+                        end do
+                        q_cons_vf(eqn_idx%damage)%sf(j, k, l) = solid_partial_density*q_prim_vf(eqn_idx%damage)%sf(j, k, l)
+                    end if
 
                     if (hyper_cleaning) q_cons_vf(eqn_idx%psi)%sf(j, k, l) = q_prim_vf(eqn_idx%psi)%sf(j, k, l)
                 end do
@@ -969,10 +948,10 @@ contains
         ! functions, the shear and volume Reynolds numbers and the Weber numbers
 
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(3)  :: alpha_rho_K
-            real(wp), dimension(3)  :: alpha_K
-            real(wp), dimension(3)  :: vel_K
-            real(wp), dimension(10) :: Y_K
+            real(wp), dimension(3)                       :: alpha_rho_K
+            real(wp), dimension(3)                       :: alpha_K
+            real(wp), dimension(3)                       :: vel_K
+            real(wp), dimension(${AMD_NUM_SPECIES_MAX}$) :: Y_K
         #:else
             real(wp), dimension(num_fluids)  :: alpha_rho_K
             real(wp), dimension(num_fluids)  :: alpha_K
@@ -1093,8 +1072,8 @@ contains
                             ! checker prohibits hypoelastic HLLD there, so the block is dead code.
                             #:if not MFC_CASE_OPTIMIZATION or num_fluids > 1
                                 if (alt_soundspeed) then
-                                    blkmod1_K = ((gammas(1) + 1._wp)*pres_K + pi_infs(1))/gammas(1) + (4._wp/3._wp)*Gs_vc(1)
-                                    blkmod2_K = ((gammas(2) + 1._wp)*pres_K + pi_infs(2))/gammas(2) + (4._wp/3._wp)*Gs_vc(2)
+                                    blkmod1_K = f_bulk_modulus(pres_K, gammas(1), pi_infs(1)) + (4._wp/3._wp)*Gs_vc(1)
+                                    blkmod2_K = f_bulk_modulus(pres_K, gammas(2), pi_infs(2)) + (4._wp/3._wp)*Gs_vc(2)
                                     K_K = alpha_K(1)*alpha_K(2)*(blkmod2_K - blkmod1_K)/(alpha_K(1)*blkmod2_K + alpha_K(2) &
                                                   & *blkmod1_K + verysmall)
                                 end if
@@ -1192,9 +1171,9 @@ contains
     !> Deallocate fluid property arrays and post-processing fields allocated during module initialization.
     impure subroutine s_finalize_variables_conversion_module()
 
-        if (allocated(rho_sf)) deallocate (rho_sf, gamma_sf, pi_inf_sf, qv_sf)
+        if (allocated(rho_sf)) deallocate (rho_sf, gamma_sf, pi_inf_sf)
 
-        @:DEALLOCATE(gammas, gs_min, pi_infs, ps_inf, cvs, qvs, qvps, Gs_vc)
+        @:DEALLOCATE(Gs_vc, fluid_k_therm)
         if (allocated(bubrs_vc)) then
             @:DEALLOCATE(bubrs_vc)
         end if
@@ -1204,65 +1183,64 @@ contains
 
     end subroutine s_finalize_variables_conversion_module
 
-    !> Compute the speed of sound from thermodynamic state variables, supporting multiple equation-of-state models.
-    subroutine s_compute_speed_of_sound(pres, rho, gamma, pi_inf, H, adv, vel_sum, c_c, c, qv)
+    !> Total energy per unit volume, thermodynamic terms only. Callers add magnetic and elastic energy, which are not
+    !! equation-of-state terms. The chemistry and relativistic branches use a different relation and stay open-coded.
+    subroutine s_compute_energy(pres, alpha_rho_K, alpha_K, vel_sum, E)
 
-        $:GPU_ROUTINE(parallelism='[seq]')
+        $:GPU_ROUTINE(function_name='s_compute_energy', parallelism='[seq]', cray_inline=True)
 
-        real(wp), intent(in) :: pres
-        real(wp), intent(in) :: rho, gamma, pi_inf, qv
-        real(wp), intent(in) :: H
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(3), intent(in) :: adv
+            real(wp), dimension(3), intent(in) :: alpha_rho_K, alpha_K
         #:else
-            real(wp), dimension(num_fluids), intent(in) :: adv
+            real(wp), dimension(num_fluids), intent(in) :: alpha_rho_K, alpha_K
         #:endif
-        real(wp), intent(in)  :: vel_sum
-        real(wp), intent(in)  :: c_c
-        real(wp), intent(out) :: c
-        real(wp)              :: blkmod1, blkmod2
-        integer               :: q
+        real(wp), intent(in)  :: pres, vel_sum
+        real(wp), intent(out) :: E
+        real(wp)              :: rho, gamma, pi_inf, qv
 
-        if (chemistry) then  ! Reacting mixture sound speed
-            if (avg_state == avg_state_roe .and. abs(c_c) > verysmall) then
-                c = sqrt(c_c - (gamma - 1.0_wp)*(vel_sum - H))
-            else
-                c = sqrt((1.0_wp + 1.0_wp/gamma)*pres/rho)
-            end if
-        else if (relativity) then  ! Relativistic sound speed
-            c = sqrt((1._wp + 1._wp/gamma)*pres/rho/H)
-        else
-            if (alt_soundspeed) then  ! Wood's mixture sound speed via bulk moduli
-                blkmod1 = ((gammas(1) + 1._wp)*pres + pi_infs(1))/gammas(1)
-                blkmod2 = ((gammas(2) + 1._wp)*pres + pi_infs(2))/gammas(2)
-                c = (1._wp/(rho*(adv(1)/blkmod1 + adv(2)/blkmod2)))
-            else if (model_eqns == model_eqns_6eq) then  ! Six-equation model sound speed
-                c = 0._wp
-                $:GPU_LOOP(parallelism='[seq]')
-                do q = 1, num_fluids
-                    c = c + adv(q)*gs_min(q)*(pres + pi_infs(q)/(gammas(q) + 1._wp))
-                end do
-                c = c/rho
-            else if (model_eqns == model_eqns_5eq .and. bubbles_euler) then
-                ! Sound speed for bubble mixture to order O(\alpha)
+        call s_compute_mixture_coefficients(alpha_rho_K, alpha_K, rho, gamma, pi_inf, qv)
 
-                if (mpp_lim .and. (num_fluids > 1)) then
-                    c = (1._wp/gamma + 1._wp)*(pres + pi_inf/(gamma + 1._wp))/rho
-                else
-                    c = (1._wp/gamma + 1._wp)*(pres + pi_inf/(gamma + 1._wp))/(rho*(1._wp - adv(num_fluids)))
-                end if
-            else
-                c = (H - 5.e-1*vel_sum - qv/rho)/gamma
-            end if
+        ! E = dyn_p + (1 - alf)(gamma p + pi_inf) + qv. Only the liquid's internal energy is diluted;
+        ! qv is already an energy density.
+        E = gamma*pres + pi_inf
+        if (bubbles_euler) E = E*(1._wp - alpha_K(num_fluids))
+        E = E + qv + 5.e-1_wp*rho*vel_sum
 
-            if (mixture_err .and. c < 0._wp) then
-                c = 100._wp*sgm_eps
-            else
-                c = sqrt(c)
-            end if
+    end subroutine s_compute_energy
+
+    !> Elastic strain energy of one stress component, doubled for a shear component: the tensor stores it once, the energy counts
+    !! both off-diagonal entries. Zero without a shear modulus.
+    function f_elastic_energy(tau, G, is_shear) result(dE)
+
+        $:GPU_ROUTINE(function_name='f_elastic_energy', parallelism='[seq]', cray_inline=True)
+
+        real(wp), intent(in) :: tau, G
+        logical, intent(in)  :: is_shear
+        real(wp)             :: dE
+
+        dE = 0._wp
+        if (G > verysmall) then
+            dE = (tau*tau)/max(4._wp*G, verysmall)
+            if (is_shear) dE = dE + (tau*tau)/max(4._wp*G, verysmall)
         end if
 
-    end subroutine s_compute_speed_of_sound
+    end function f_elastic_energy
+
+    !> Hypoelastic strain energy at one cell, summed over the stress components.
+    function f_hypoelastic_energy(q_cons_vf, j, k, l, rho, G) result(E_e)
+
+        type(scalar_field), dimension(sys_size), intent(in) :: q_cons_vf
+        integer, intent(in)                                 :: j, k, l
+        real(wp), intent(in)                                :: rho, G
+        real(wp)                                            :: E_e
+        integer                                             :: s
+
+        E_e = 0._wp
+        do s = eqn_idx%stress%beg, eqn_idx%stress%end
+            E_e = E_e + f_elastic_energy(real(q_cons_vf(s)%sf(j, k, l), wp)/rho, G, any(s == shear_indices))
+        end do
+
+    end function f_hypoelastic_energy
 
     !> Compute the fast magnetosonic wave speed from the sound speed, density, and magnetic field components.
     subroutine s_compute_fast_magnetosonic_speed(rho, c, B, norm, c_fast, h)

@@ -5,22 +5,21 @@
 !> @brief HLLC Riemann solver with contact restoration, Toro et al. Shock Waves (1994)
 #:include 'case.fpp'
 #:include 'macros.fpp'
-#:include 'inline_riemann.fpp'
 
 module m_riemann_solver_hllc
 
     use m_derived_types
     use m_global_parameters
     use m_variables_conversion
+    use m_eos
     use m_bubbles
     use m_constants, only: riemann_solver_hll, riemann_solver_hllc, riemann_solver_lax_friedrichs, model_eqns_5eq, &
         & model_eqns_6eq, avg_state_roe, avg_state_arithmetic, wave_speeds_direct, wave_speeds_pressure
     use m_bubbles_EE
     use m_surface_tension
     use m_chemistry
-    use m_thermochem, only: gas_constant, get_mixture_molecular_weight, get_mixture_specific_heat_cv_mass, &
-        & get_mixture_energy_mass, get_species_specific_heats_r, get_species_enthalpies_rt, get_mixture_specific_heat_cp_mass, &
-        & molecular_weights
+    use m_thermochem, only: gas_constant, get_mixture_molecular_weight, get_species_enthalpies_rt, molecular_weights
+    use m_thermochem_state, only: get_mixture_caloric_state
     use m_riemann_state
 
     implicit none
@@ -61,13 +60,12 @@ contains
         real(wp) :: E_L, E_R
         real(wp) :: H_L, H_R
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(10) :: Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR
-            real(wp), dimension(10) :: Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2
+            real(wp), dimension(${AMD_NUM_SPECIES_MAX}$) :: Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR, R_species, &
+                 & h_iL, h_iR
         #:else
-            real(wp), dimension(num_species) :: Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR
-            real(wp), dimension(num_species) :: Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2
+            real(wp), dimension(num_species) :: Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR, R_species, h_iL, h_iR
         #:endif
-        real(wp)               :: Cp_avg, Cv_avg, T_avg, c_sum_Yi_Phi, eps
+        real(wp)               :: c_sum_Yi_Phi
         real(wp)               :: T_L, T_R
         real(wp)               :: MW_L, MW_R
         real(wp)               :: R_gas_L, R_gas_R
@@ -110,18 +108,19 @@ contains
         real(wp), dimension(6) :: tau_e_L, tau_e_R
         real(wp) :: G_L, G_R
         real(wp) :: damage_L, damage_R
+        real(wp) :: solid_partial_density_L, solid_partial_density_R
         real(wp) :: vel_L_rms, vel_R_rms, vel_avg_rms
-        real(wp) :: vel_L_tmp, vel_R_tmp
         real(wp) :: rho_Star, E_Star, p_Star, p_K_Star, vel_K_star
+        real(wp) :: alpha_K_star, alpha_rho_K_star, p_isen_L, p_isen_R, e_K_star
         real(wp) :: pres_SL, pres_SR, Ms_L, Ms_R
-        real(wp) :: zcoef, pcorr               !< low Mach number correction
+        real(wp) :: pcorr                      !< low Mach number correction
         integer :: i, j, k, l, q               !< Generic loop iterators
         integer :: Re_size_loc1, Re_size_loc2  !< host copy of Re_size; amdflang reads the declare-target original stale cross-TU
 
         ! HLLC star-state helpers
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(20) :: U_L, U_R
-            real(wp), dimension(20) :: F_L, F_R, F_star_L, F_star_R, F_HLLC
+            real(wp), dimension(${AMD_SYS_SIZE_MAX}$) :: U_L, U_R
+            real(wp), dimension(${AMD_SYS_SIZE_MAX}$) :: F_L, F_R, F_star_L, F_star_R, F_HLLC
         #:else
             real(wp), dimension(sys_size) :: U_L, U_R
             real(wp), dimension(sys_size) :: F_L, F_R, F_star_L, F_star_R, F_HLLC
@@ -142,7 +141,7 @@ contains
 
         ! ADC (HLL -> HLLC)
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(20) :: F_HLL
+            real(wp), dimension(${AMD_SYS_SIZE_MAX}$) :: F_HLL
         #:else
             real(wp), dimension(sys_size) :: F_HLL
         #:endif
@@ -180,14 +179,14 @@ contains
                     ! 6-equation model (model_eqns=3): separate phasic internal energies
                     $:GPU_PARALLEL_LOOP(collapse=3, private='[i, j, k, l, vel_L, vel_R, Re_L, Re_R, alpha_L, alpha_R, &
                                         & alpha_rho_L, alpha_rho_R, Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR, &
-                                        & Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2, pcorr, zcoef, rho_L, rho_R, pres_L, pres_R, E_L, &
-                                        & E_R, H_L, H_R, Cp_avg, Cv_avg, T_avg, eps, c_sum_Yi_Phi, T_L, T_R, Y_L, Y_R, MW_L, &
-                                        & MW_R, R_gas_L, R_gas_R, Cp_L, Cp_R, Cv_L, Cv_R, Gamm_L, Gamm_R, gamma_L, gamma_R, &
-                                        & pi_inf_L, pi_inf_R, qv_L, qv_R, qv_avg, c_L, c_R, rho_avg, H_avg, c_avg, gamma_avg, &
-                                        & ptilde_L, ptilde_R, vel_L_rms, vel_R_rms, vel_avg_rms, vel_L_tmp, vel_R_tmp, Ms_L, &
-                                        & Ms_R, pres_SL, pres_SR, alpha_L_sum, alpha_R_sum, rho_Star, E_Star, p_Star, p_K_Star, &
+                                        & R_species, pcorr, rho_L, rho_R, pres_L, pres_R, E_L, E_R, H_L, H_R, c_sum_Yi_Phi, T_L, &
+                                        & T_R, Y_L, Y_R, MW_L, MW_R, R_gas_L, R_gas_R, Cp_L, Cp_R, Cv_L, Cv_R, Gamm_L, Gamm_R, &
+                                        & gamma_L, gamma_R, pi_inf_L, pi_inf_R, qv_L, qv_R, qv_avg, c_L, c_R, rho_avg, H_avg, &
+                                        & c_avg, gamma_avg, ptilde_L, ptilde_R, vel_L_rms, vel_R_rms, vel_avg_rms, Ms_L, Ms_R, &
+                                        & pres_SL, pres_SR, alpha_L_sum, alpha_R_sum, rho_Star, E_Star, p_Star, p_K_Star, &
                                         & vel_K_star, s_L, s_R, s_M, s_P, s_S, xi_M, xi_P, xi_L, xi_R, xi_L_m1, xi_R_m1, xi_MP, &
-                                        & xi_PP]', firstprivate='[Re_size_loc1, Re_size_loc2]')
+                                        & xi_PP, alpha_K_star, alpha_rho_K_star, p_isen_L, p_isen_R, e_K_star]', &
+                                        & firstprivate='[Re_size_loc1, Re_size_loc2]')
                     do l = ${Z_BND}$%beg, ${Z_BND}$%end
                         do k = ${Y_BND}$%beg, ${Y_BND}$%end
                             do j = ${X_BND}$%beg, ${X_BND}$%end
@@ -256,34 +255,41 @@ contains
                                     alpha_R(i) = qR_prim_rsx_vf(${SF(' + 1')}$, eqn_idx%adv%beg + i - 1)
                                 end do
 
-                                call s_accumulate_mixture_properties(num_fluids, alpha_rho_L, alpha_L, rho_L, gamma_L, pi_inf_L, &
-                                                                     & qv_L)
-                                call s_accumulate_mixture_properties(num_fluids, alpha_rho_R, alpha_R, rho_R, gamma_R, pi_inf_R, &
-                                                                     & qv_R)
+                                call s_compute_mixture_coefficients(alpha_rho_L, alpha_L, rho_L, gamma_L, pi_inf_L, qv_L)
+                                call s_compute_mixture_coefficients(alpha_rho_R, alpha_R, rho_R, gamma_R, pi_inf_R, qv_R)
 
                                 if (viscous) then
                                     call s_compute_interface_reynolds(alpha_L, Re_L, Re_size_loc1, Re_size_loc2)
                                     call s_compute_interface_reynolds(alpha_R, Re_R, Re_size_loc1, Re_size_loc2)
                                 end if
 
-                                E_L = gamma_L*pres_L + pi_inf_L + 5.e-1_wp*rho_L*vel_L_rms + qv_L
-                                E_R = gamma_R*pres_R + pi_inf_R + 5.e-1_wp*rho_R*vel_R_rms + qv_R
+                                call s_compute_energy(pres_L, alpha_rho_L, alpha_L, vel_L_rms, E_L)
+                                call s_compute_energy(pres_R, alpha_rho_R, alpha_R, vel_R_rms, E_R)
 
                                 H_L = (E_L + pres_L)/rho_L
                                 H_R = (E_R + pres_R)/rho_R
 
-                                @:compute_average_state()
+                                ! Only the Roe path writes this, and chemistry is unreachable at model_eqns = 6eq; zero it
+                                ! so the sound speed below never reads an undefined value.
+                                c_sum_Yi_Phi = 0._wp
 
-                                call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, H_L, alpha_L, vel_L_rms, 0._wp, &
-                                                              & c_L, qv_L)
+                                ! Only the pressure-based wave-speed estimate reads the averaged state, and the Roe
+                                ! average costs eight square roots per face.
+                                if (wave_speeds == wave_speeds_pressure) then
+                                    call s_compute_average_state(rho_L, rho_R, vel_L, vel_R, H_L, H_R, gamma_L, gamma_R, qv_L, &
+                                                                 & qv_R, rho_avg, vel_avg_rms, H_avg, gamma_avg, qv_avg)
+                                end if
 
-                                call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, H_R, alpha_R, vel_R_rms, 0._wp, &
-                                                              & c_R, qv_R)
+                                call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, alpha_L, c_L, alpha_rho_L)
 
-                                !> The computation of c_avg does not require all the variables, and therefore the non '_avg'
-                                ! variables are placeholders to call the subroutine.
-                                call s_compute_speed_of_sound(pres_R, rho_avg, gamma_avg, pi_inf_R, H_avg, alpha_R, vel_avg_rms, &
-                                                              & 0._wp, c_avg, qv_avg)
+                                call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, alpha_R, c_R, alpha_rho_R)
+
+                                ! Only the pressure-based wave-speed estimate reads the averaged state, and building it
+                                ! costs eight square roots per face under the Roe average.
+                                if (wave_speeds == wave_speeds_pressure) then
+                                    call s_compute_speed_of_sound_avg(pres_R, rho_avg, gamma_avg, pi_inf_R, qv_avg, vel_avg_rms, &
+                                                                      & H_avg, c_sum_Yi_Phi, alpha_R, c_avg, alpha_rho_R)
+                                end if
 
                                 if (viscous) then
                                     $:GPU_LOOP(parallelism='[seq]')
@@ -300,7 +306,8 @@ contains
 
                                 ! Low Mach correction
                                 if (low_Mach == 2) then
-                                    @:compute_low_Mach_correction()
+                                    call s_apply_low_Mach_velocity(vel_L_rms, vel_R_rms, c_L, c_R, vel_L(dir_idx(1)), &
+                                                                   & vel_R(dir_idx(1)))
                                 end if
 
                                 ! COMPUTING THE DIRECT WAVE SPEEDS
@@ -317,11 +324,13 @@ contains
 
                                     ! Low Mach correction: Thornber et al. JCP (2008)
                                     Ms_L = max(1._wp, &
-                                               & sqrt(1._wp + ((5.e-1_wp + gamma_L)/(1._wp + gamma_L))*(pres_SL/pres_L - 1._wp) &
-                                               & *pres_L/((pres_L + pi_inf_L/(1._wp + gamma_L)))))
+                                               & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_L) + 1._wp) &
+                                               & /f_isentrope_exponent(gamma_L)*(pres_SL - pres_L)/(pres_L &
+                                               & + f_isentrope_pressure(pi_inf_L, gamma_L))))
                                     Ms_R = max(1._wp, &
-                                               & sqrt(1._wp + ((5.e-1_wp + gamma_R)/(1._wp + gamma_R))*(pres_SR/pres_R - 1._wp) &
-                                               & *pres_R/((pres_R + pi_inf_R/(1._wp + gamma_R)))))
+                                               & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_R) + 1._wp) &
+                                               & /f_isentrope_exponent(gamma_R)*(pres_SR - pres_R)/(pres_R &
+                                               & + f_isentrope_pressure(pi_inf_R, gamma_R))))
 
                                     s_L = vel_L(dir_idx(1)) - c_L*Ms_L
                                     s_R = vel_R(dir_idx(1)) + c_R*Ms_R
@@ -358,11 +367,8 @@ contains
                                                    & - vel_R(dir_idx(1)))
 
                                 ! Low Mach correction
-                                if (low_Mach == 1) then
-                                    @:compute_low_Mach_correction()
-                                else
-                                    pcorr = 0._wp
-                                end if
+                                pcorr = f_low_Mach_pcorr_hllc(vel_L_rms, vel_R_rms, c_L, c_R, rho_L, rho_R, s_L, s_R, &
+                                                              & vel_L(dir_idx(1)), vel_R(dir_idx(1)))
 
                                 ! COMPUTING FLUXES MASS FLUX.
                                 $:GPU_LOOP(parallelism='[seq]')
@@ -405,18 +411,29 @@ contains
                                 ! energy flux
                                 $:GPU_LOOP(parallelism='[seq]')
                                 do i = 1, num_fluids
-                                    p_K_Star = xi_M*(xi_MP*((pres_L + pi_infs(i)/(1._wp + gammas(i)))*xi_L**(1._wp/gammas(i) &
-                                                     & + 1._wp) - pi_infs(i)/(1._wp + gammas(i)) - pres_L) + pres_L) &
-                                                     & + xi_P*(xi_PP*((pres_R + pi_infs(i)/(1._wp + gammas(i))) &
-                                                     & *xi_R**(1._wp/gammas(i) + 1._wp) - pi_infs(i)/(1._wp + gammas(i)) - pres_R) &
-                                                     & + pres_R)
+                                    ! Phasic isentrope p* from the upwind state: closed form for stiffened gas, integrated
+                                    ! for a state-dependent EOS.
+                                    call s_phase_pressure_on_isentrope(pres_L, alpha_rho_L(i)/max(alpha_L(i), sgm_eps), xi_L, i, &
+                                                                       & p_isen_L)
+                                    call s_phase_pressure_on_isentrope(pres_R, alpha_rho_R(i)/max(alpha_R(i), sgm_eps), xi_R, i, &
+                                                                       & p_isen_R)
+                                    p_K_Star = xi_M*(xi_MP*(p_isen_L - pres_L) + pres_L) + xi_P*(xi_PP*(p_isen_R - pres_R) + pres_R)
 
-                                    flux_rsx_vf(${SF('')}$, i + eqn_idx%int_en%beg - 1) = ((xi_M*qL_prim_rsx_vf(${SF('')}$, &
-                                                & i + eqn_idx%adv%beg - 1) + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
-                                                & i + eqn_idx%adv%beg - 1))*(gammas(i)*p_K_Star + pi_infs(i)) &
-                                                & + (xi_M*qL_prim_rsx_vf(${SF('')}$, &
-                                                & i + eqn_idx%cont%beg - 1) + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
-                                                & i + eqn_idx%cont%beg - 1))*qvs(i))*vel_K_Star + (s_M/s_L)*(s_P/s_R) &
+                                    alpha_K_star = xi_M*qL_prim_rsx_vf(${SF('')}$, &
+                                                                       & i + eqn_idx%adv%beg - 1) &
+                                                                       & + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
+                                                                       & i + eqn_idx%adv%beg - 1)
+                                    alpha_rho_K_star = xi_M*qL_prim_rsx_vf(${SF('')}$, &
+                                                                           & i + eqn_idx%cont%beg - 1) &
+                                                                           & + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
+                                                                           & i + eqn_idx%cont%beg - 1)
+                                    ! Star partial density xi_K alpha_rho, blended like p_K_Star: a state-dependent EOS reads
+                                    ! its coefficients at the star density, not the upwind one.
+                                    call s_phase_internal_energy(p_K_Star, alpha_K_star, &
+                                                                 & alpha_rho_K_star*(1._wp + xi_M*xi_MP*(xi_L - 1._wp) &
+                                                                 & + xi_P*xi_PP*(xi_R - 1._wp)), i, e_K_star)
+                                    flux_rsx_vf(${SF('')}$, &
+                                                & i + eqn_idx%int_en%beg - 1) = e_K_star*vel_K_Star + (s_M/s_L)*(s_P/s_R) &
                                                 & *pcorr*s_S*(xi_M*qL_prim_rsx_vf(${SF('')}$, &
                                                 & i + eqn_idx%adv%beg - 1) + xi_P*qR_prim_rsx_vf(${SF(' + 1')}$, &
                                                 & i + eqn_idx%adv%beg - 1))
@@ -474,13 +491,12 @@ contains
                     ! 5-equation model with Euler-Euler bubble dynamics
                     $:GPU_PARALLEL_LOOP(collapse=3, private='[i, q, R0_L, R0_R, V0_L, V0_R, P0_L, P0_R, pbw_L, pbw_R, vel_L, &
                                         & vel_R, rho_avg, alpha_L, alpha_R, alpha_rho_L, alpha_rho_R, h_avg, gamma_avg, Re_L, &
-                                        & Re_R, pcorr, zcoef, rho_L, rho_R, pres_L, pres_R, E_L, E_R, H_L, H_R, gamma_L, gamma_R, &
+                                        & Re_R, pcorr, rho_L, rho_R, pres_L, pres_R, E_L, E_R, H_L, H_R, gamma_L, gamma_R, &
                                         & pi_inf_L, pi_inf_R, qv_L, qv_R, qv_avg, c_L, c_R, c_avg, vel_L_rms, vel_R_rms, &
-                                        & vel_avg_rms, vel_L_tmp, vel_R_tmp, Ms_L, Ms_R, pres_SL, pres_SR, alpha_L_sum, &
-                                        & alpha_R_sum, s_L, s_R, s_M, s_P, s_S, xi_M, xi_P, xi_L, xi_R, xi_L_m1, xi_R_m1, xi_MP, &
-                                        & xi_PP, nbub_L, nbub_R, PbwR3Lbar, PbwR3Rbar, R3Lbar, R3Rbar, R3V2Lbar, R3V2Rbar, Ys_L, &
-                                        & Ys_R, Cp_iL, Cp_iR, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Yi_avg, Phi_avg, h_iL, h_iR, &
-                                        & h_avg_2]', firstprivate='[Re_size_loc1, Re_size_loc2]')
+                                        & vel_avg_rms, Ms_L, Ms_R, pres_SL, pres_SR, alpha_L_sum, alpha_R_sum, s_L, s_R, s_M, &
+                                        & s_P, s_S, xi_M, xi_P, xi_L, xi_R, xi_L_m1, xi_R_m1, xi_MP, xi_PP, nbub_L, nbub_R, &
+                                        & PbwR3Lbar, PbwR3Rbar, R3Lbar, R3Rbar, R3V2Lbar, R3V2Rbar, Ys_L, Ys_R, Cp_iL, Cp_iR, &
+                                        & Xs_L, Xs_R, Gamma_iL, Gamma_iR]', firstprivate='[Re_size_loc1, Re_size_loc2]')
                     do l = ${Z_BND}$%beg, ${Z_BND}$%end
                         do k = ${Y_BND}$%beg, ${Y_BND}$%end
                             do j = ${X_BND}$%beg, ${X_BND}$%end
@@ -508,27 +524,8 @@ contains
                                     vel_R_rms = vel_R_rms + vel_R(i)**2._wp
                                 end do
 
-                                ! Retain this in the refactor
-                                if (mpp_lim .and. (num_fluids > 2)) then
-                                    call s_accumulate_mixture_properties(num_fluids, alpha_rho_L, alpha_L, rho_L, gamma_L, &
-                                                                         & pi_inf_L, qv_L)
-                                    call s_accumulate_mixture_properties(num_fluids, alpha_rho_R, alpha_R, rho_R, gamma_R, &
-                                                                         & pi_inf_R, qv_R)
-                                else if (num_fluids > 2) then
-                                    call s_accumulate_mixture_properties(num_fluids - 1, alpha_rho_L, alpha_L, rho_L, gamma_L, &
-                                                                         & pi_inf_L, qv_L)
-                                    call s_accumulate_mixture_properties(num_fluids - 1, alpha_rho_R, alpha_R, rho_R, gamma_R, &
-                                                                         & pi_inf_R, qv_R)
-                                else
-                                    rho_L = qL_prim_rsx_vf(${SF('')}$, 1)
-                                    gamma_L = gammas(1)
-                                    pi_inf_L = pi_infs(1)
-                                    qv_L = qvs(1)
-                                    rho_R = qR_prim_rsx_vf(${SF(' + 1')}$, 1)
-                                    gamma_R = gammas(1)
-                                    pi_inf_R = pi_infs(1)
-                                    qv_R = qvs(1)
-                                end if
+                                call s_compute_mixture_coefficients(alpha_rho_L, alpha_L, rho_L, gamma_L, pi_inf_L, qv_L)
+                                call s_compute_mixture_coefficients(alpha_rho_R, alpha_R, rho_R, gamma_R, pi_inf_R, qv_R)
 
                                 if (viscous) then
                                     if (num_fluids == 1) then  ! Need to consider case with num_fluids >= 2
@@ -557,8 +554,8 @@ contains
                                 pres_L = qL_prim_rsx_vf(${SF('')}$, eqn_idx%E)
                                 pres_R = qR_prim_rsx_vf(${SF(' + 1')}$, eqn_idx%E)
 
-                                E_L = gamma_L*pres_L + pi_inf_L + 5.e-1_wp*rho_L*vel_L_rms
-                                E_R = gamma_R*pres_R + pi_inf_R + 5.e-1_wp*rho_R*vel_R_rms
+                                call s_compute_energy(pres_L, alpha_rho_L, alpha_L, vel_L_rms, E_L)
+                                call s_compute_energy(pres_R, alpha_rho_R, alpha_R, vel_R_rms, E_R)
 
                                 H_L = (E_L + pres_L)/rho_L
                                 H_R = (E_R + pres_R)/rho_R
@@ -652,16 +649,18 @@ contains
                                     end do
                                 end if
 
-                                call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, H_L, alpha_L, vel_L_rms, 0._wp, &
-                                                              & c_L, qv_L)
+                                call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, alpha_L, c_L, alpha_rho_L)
 
-                                call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, H_R, alpha_R, vel_R_rms, 0._wp, &
-                                                              & c_R, qv_R)
+                                call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, alpha_R, c_R, alpha_rho_R)
 
-                                !> The computation of c_avg does not require all the variables, and therefore the non '_avg'
-                                ! variables are placeholders to call the subroutine.
-                                call s_compute_speed_of_sound(pres_R, rho_avg, gamma_avg, pi_inf_R, H_avg, alpha_R, vel_avg_rms, &
-                                                              & 0._wp, c_avg, qv_avg)
+                                ! Only the pressure-based wave-speed estimate reads the averaged state, and building it
+                                ! costs eight square roots per face under the Roe average.
+                                if (wave_speeds == wave_speeds_pressure) then
+                                    ! Zero, not c_sum_Yi_Phi: this loop never forms the chemistry average, and
+                                    ! chemistry with bubbles_euler/qbmm is prohibited, so the branch is unreachable.
+                                    call s_compute_speed_of_sound_avg(pres_R, rho_avg, gamma_avg, pi_inf_R, qv_avg, vel_avg_rms, &
+                                                                      & H_avg, 0._wp, alpha_R, c_avg, alpha_rho_R)
+                                end if
 
                                 if (viscous) then
                                     $:GPU_LOOP(parallelism='[seq]')
@@ -678,7 +677,8 @@ contains
 
                                 ! Low Mach correction
                                 if (low_Mach == 2) then
-                                    @:compute_low_Mach_correction()
+                                    call s_apply_low_Mach_velocity(vel_L_rms, vel_R_rms, c_L, c_R, vel_L(dir_idx(1)), &
+                                                                   & vel_R(dir_idx(1)))
                                 end if
 
                                 if (wave_speeds == wave_speeds_direct) then
@@ -695,11 +695,13 @@ contains
 
                                     ! Low Mach correction: Thornber et al. JCP (2008)
                                     Ms_L = max(1._wp, &
-                                               & sqrt(1._wp + ((5.e-1_wp + gamma_L)/(1._wp + gamma_L))*(pres_SL/pres_L - 1._wp) &
-                                               & *pres_L/((pres_L + pi_inf_L/(1._wp + gamma_L)))))
+                                               & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_L) + 1._wp) &
+                                               & /f_isentrope_exponent(gamma_L)*(pres_SL - pres_L)/(pres_L &
+                                               & + f_isentrope_pressure(pi_inf_L, gamma_L))))
                                     Ms_R = max(1._wp, &
-                                               & sqrt(1._wp + ((5.e-1_wp + gamma_R)/(1._wp + gamma_R))*(pres_SR/pres_R - 1._wp) &
-                                               & *pres_R/((pres_R + pi_inf_R/(1._wp + gamma_R)))))
+                                               & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_R) + 1._wp) &
+                                               & /f_isentrope_exponent(gamma_R)*(pres_SR - pres_R)/(pres_R &
+                                               & + f_isentrope_pressure(pi_inf_R, gamma_R))))
 
                                     s_L = vel_L(dir_idx(1)) - c_L*Ms_L
                                     s_R = vel_R(dir_idx(1)) + c_R*Ms_R
@@ -721,11 +723,8 @@ contains
                                 xi_P = (5.e-1_wp - sign(5.e-1_wp, s_S))
 
                                 ! Low Mach correction
-                                if (low_Mach == 1) then
-                                    @:compute_low_Mach_correction()
-                                else
-                                    pcorr = 0._wp
-                                end if
+                                pcorr = f_low_Mach_pcorr_hllc(vel_L_rms, vel_R_rms, c_L, c_R, rho_L, rho_R, s_L, s_R, &
+                                                              & vel_L(dir_idx(1)), vel_R(dir_idx(1)))
 
                                 $:GPU_LOOP(parallelism='[seq]')
                                 do i = 1, eqn_idx%cont%end
@@ -865,17 +864,42 @@ contains
                         ! statement and private variable from the pure-fluid emission, keeping its body and directive
                         ! identical to the single kernel a build without hypoelasticity would compile. Sharing one kernel
                         ! pinned it at the GPU register ceiling for every HLLC user.
+                        ! One source of truth for this kernel's private variables: both emissions of the shared body take
+                        ! _hllc_s*, and only the hypoelastic one adds _hllc_e*. Two hand-written lists drifted apart once --
+                        ! c_sum_Yi_Phi was private in one and shared in the other, which races under OpenMP offload.
+                        ! Names are lists joined once, so no fragment carries a trailing separator to get wrong.
+                        #:set _hllc_s1 = ['i', 'j', 'k', 'l', 'q', 'T_L', 'T_R', 'vel_L_rms', 'vel_R_rms', 'pres_L', 'pres_R', &
+                            & 'rho_L', 'gamma_L', 'pi_inf_L', 'qv_L', 'rho_R', 'gamma_R']
+                        #:set _hllc_s2 = ['pi_inf_R', 'qv_R', 'alpha_L_sum', 'alpha_R_sum', 'E_L', 'E_R', 'MW_L', 'MW_R', &
+                            & 'R_gas_L', 'R_gas_R', 'Cp_L', 'Cp_R', 'Cv_L', 'Cv_R', 'c_sum_Yi_Phi']
+                        #:set _hllc_s3 = ['Gamm_L', 'Gamm_R', 'Y_L', 'Y_R', 'H_L', 'H_R', 'qv_avg', 'rho_avg', 'gamma_avg', &
+                            & 'H_avg', 'c_L', 'c_R', 'c_avg', 's_P', 's_M', 'xi_P', 'xi_M', 'xi_L']
+                        #:set _hllc_s4 = ['xi_R', 'xi_L_m1', 'xi_R_m1', 'Ms_L', 'Ms_R', 'pres_SL', 'pres_SR', 'vel_L', 'vel_R', &
+                            & 'Re_L', 'Re_R', 'alpha_L', 'alpha_R', 'alpha_rho_L', 'alpha_rho_R']
+                        #:set _hllc_s5 = ['alpha_lim_L', 'alpha_lim_R', 's_L', 's_R', 's_S', 'vel_avg_rms', 'pcorr', 'Ys_L', &
+                            & 'Ys_R', 'Xs_L', 'Xs_R', 'Gamma_iL', 'Gamma_iR', 'Cp_iL', 'Cp_iR']
+                        #:set _hllc_s6 = ['R_species', 'h_iL', 'h_iR']
+                        #:set _hllc_e1 = ['ptilde_L', 'ptilde_R', 'tau_e_L', 'tau_e_R', 'G_L', 'G_R', 'damage_L', 'damage_R', &
+                            & 'solid_partial_density_L', 'solid_partial_density_R', &
+                            & 'U_L', 'U_R', 'F_L', 'F_R', 'F_star_L', 'F_star_R', 'F_HLLC']
+                        #:set _hllc_e2 = ['u_n_HLLC', 'u_t_HLLC', 'u_t2_HLLC', 'pres_tot_L', 'pres_tot_R', 'u_n_L', 'u_n_R', &
+                            & 'u_t_L', 'u_t_R', 'u_t2_L', 'u_t2_R', 'tau_nn_L', 'tau_nn_R']
+                        #:set _hllc_e3 = ['tau_nt_L', 'tau_nt_R', 'tau_tt_L', 'tau_tt_R', 'tau_nt2_L', 'tau_nt2_R', 'tau_t2t2_L', &
+                            & 'tau_t2t2_R', 'tau_t1t2_L', 'tau_t1t2_R', 'tau_qq_L', 'tau_qq_R']
+                        #:set _hllc_e4 = ['p_face', 'tau_qq_face', 'A_L', 'A_R', 'denom_A', 'u_t_star', 'tau_nt_star', &
+                            & 'u_t2_star', 'tau_nt2_star', 'pres_tot_star', 'F_HLL', 'u_n_HLL_trace']
+                        #:set _hllc_e5 = ['u_t_HLL_trace', 'u_t2_HLL_trace', 'p_face_HLL', 'tau_qq_face_HLL', 'tau_nn_HLL', &
+                            & 'phi', 'Sigma_L', 'Sigma_R', 'dSigma', 'Sigma_ref', 'a_L_ref']
+                        #:set _hllc_e6 = ['a_R_ref', 'a_ref', 'du_t', 'dtau_nt', 'du_t2', 'dtau_nt2', 'sensor_ptot', 'sensor_vt', &
+                            & 'sensor_tnt', 'sensor_combined', 'idx_phys']
                         #:if HYPO
-                            ! Private list split across _hllc_p1/p2/p3 for Fypp line-length limits
-                            #:set _hllc_p1 = '[i, j, k, l, q, T_L, T_R, vel_L_rms, vel_R_rms, pres_L, pres_R, rho_L, gamma_L, pi_inf_L, qv_L, rho_R, gamma_R, pi_inf_R, qv_R, alpha_L_sum, alpha_R_sum, E_L, E_R, MW_L, MW_R, R_gas_L, R_gas_R, Cp_L, Cp_R, Cv_L, Cv_R, Cp_avg, Cv_avg, T_avg, eps, c_sum_Yi_Phi, Gamm_L, Gamm_R, Y_L, Y_R, H_L, H_R, qv_avg, rho_avg, gamma_avg, H_avg, c_L, c_R, c_avg, s_P, s_M, xi_P, xi_M, xi_L, xi_R, xi_L_m1, xi_R_m1, Ms_L, Ms_R, pres_SL, pres_SR, vel_L, vel_R, Re_L, Re_R, alpha_L, alpha_R, alpha_rho_L, alpha_rho_R, alpha_lim_L, alpha_lim_R, s_L, s_R, s_S, vel_avg_rms, pcorr, zcoef, ptilde_L, ptilde_R, vel_L_tmp, vel_R_tmp, Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR, tau_e_L, tau_e_R, Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2, G_L, G_R, damage_L, damage_R,'
-                            #:set _hllc_p2 = 'U_L, U_R, F_L, F_R, F_star_L, F_star_R, F_HLLC, u_n_HLLC, u_t_HLLC, u_t2_HLLC, pres_tot_L, pres_tot_R, u_n_L, u_n_R, u_t_L, u_t_R, u_t2_L, u_t2_R, tau_nn_L, tau_nn_R, tau_nt_L, tau_nt_R, tau_tt_L, tau_tt_R, tau_nt2_L, tau_nt2_R, tau_t2t2_L, tau_t2t2_R, tau_t1t2_L, tau_t1t2_R, tau_qq_L, tau_qq_R, p_face, tau_qq_face, A_L, A_R, denom_A, u_t_star, tau_nt_star, u_t2_star, tau_nt2_star, pres_tot_star,'
-                            #:set _hllc_p3 = 'F_HLL, u_n_HLL_trace, u_t_HLL_trace, u_t2_HLL_trace, p_face_HLL, tau_qq_face_HLL, tau_nn_HLL, phi, Sigma_L, Sigma_R, dSigma, Sigma_ref, a_L_ref, a_R_ref, a_ref, du_t, dtau_nt, du_t2, dtau_nt2, sensor_ptot, sensor_vt, sensor_tnt, sensor_combined, idx_phys]'
-                            #:set _hllc_priv = _hllc_p1 + _hllc_p2 + _hllc_p3
+                            #:set _hllc_priv = '[' + ', '.join(_hllc_s1 + _hllc_s2 + _hllc_s3 + _hllc_s4 + _hllc_s5 + _hllc_s6 &
+                                                               & + _hllc_e1 + _hllc_e2 + _hllc_e3 + _hllc_e4 + _hllc_e5 &
+                                                               & + _hllc_e6) + ']'
                         #:else
-                            ! Master's pure-fluid private list, unchanged
-                            #:set _hllc_priv = '[i, T_L, T_R, vel_L_rms, vel_R_rms, pres_L, pres_R, rho_L, gamma_L, pi_inf_L, qv_L, rho_R, gamma_R, pi_inf_R, qv_R, alpha_L_sum, alpha_R_sum, E_L, E_R, MW_L, MW_R, R_gas_L, R_gas_R, Cp_L, Cp_R, Cv_L, Cv_R, Gamm_L, Gamm_R, Y_L, Y_R, H_L, H_R, qv_avg, rho_avg, gamma_avg, H_avg, c_L, c_R, c_avg, s_P, s_M, xi_P, xi_M, xi_L, xi_R, xi_L_m1, xi_R_m1, Ms_L, Ms_R, pres_SL, pres_SR, vel_L, vel_R, Re_L, Re_R, alpha_L, alpha_R, alpha_rho_L, alpha_rho_R, alpha_lim_L, alpha_lim_R, s_L, s_R, s_S, vel_avg_rms, pcorr, zcoef, vel_L_tmp, vel_R_tmp, Ys_L, Ys_R, Xs_L, Xs_R, Gamma_iL, Gamma_iR, Cp_iL, Cp_iR, Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2]'
+                            #:set _hllc_priv = '[' + ', '.join(_hllc_s1 + _hllc_s2 + _hllc_s3 + _hllc_s4 + _hllc_s5 + _hllc_s6) &
+                                                               & + ']'
                         #:endif
-                        ! The two calls below are identical on purpose. An offload kernel is named
                         ! after the .fpp line of its GPU_PARALLEL_LOOP, so one shared call would give
                         ! both emissions the same name; amdflang then launches the wrong one and a
                         ! hypoelastic run faults inside the pure-fluid kernel. Two call sites are what
@@ -979,10 +1003,8 @@ contains
                                         alpha_lim_R(i) = qR_prim_rsx_vf(${SF(' + 1')}$, eqn_idx%E + i)
                                     end do
 
-                                    call s_accumulate_mixture_properties(num_fluids, alpha_rho_L, alpha_lim_L, rho_L, gamma_L, &
-                                                                         & pi_inf_L, qv_L)
-                                    call s_accumulate_mixture_properties(num_fluids, alpha_rho_R, alpha_lim_R, rho_R, gamma_R, &
-                                                                         & pi_inf_R, qv_R)
+                                    call s_compute_mixture_coefficients(alpha_rho_L, alpha_lim_L, rho_L, gamma_L, pi_inf_L, qv_L)
+                                    call s_compute_mixture_coefficients(alpha_rho_R, alpha_lim_R, rho_R, gamma_R, pi_inf_R, qv_R)
 
                                     if (viscous) then
                                         call s_compute_interface_reynolds(alpha_L, Re_L, Re_size_loc1, Re_size_loc2)
@@ -1000,8 +1022,8 @@ contains
                                         call get_mixture_molecular_weight(Ys_L, MW_L)
                                         call get_mixture_molecular_weight(Ys_R, MW_R)
 
-                                        Xs_L(:) = Ys_L(:)*MW_L/molecular_weights(:)
-                                        Xs_R(:) = Ys_R(:)*MW_R/molecular_weights(:)
+                                        Xs_L(1:num_species) = Ys_L(1:num_species)*MW_L/molecular_weights(:)
+                                        Xs_R(1:num_species) = Ys_R(1:num_species)*MW_R/molecular_weights(:)
 
                                         R_gas_L = gas_constant/MW_L
                                         R_gas_R = gas_constant/MW_R
@@ -1009,37 +1031,29 @@ contains
                                         T_L = pres_L/rho_L/R_gas_L
                                         T_R = pres_R/rho_R/R_gas_R
 
-                                        call get_species_specific_heats_r(T_L, Cp_iL)
-                                        call get_species_specific_heats_r(T_R, Cp_iR)
+                                        call get_mixture_caloric_state(T_L, Ys_L, Cp_iL, Cp_L, Cv_L, E_L)
+                                        call get_mixture_caloric_state(T_R, Ys_R, Cp_iR, Cp_R, Cv_R, E_R)
 
                                         if (chem_params%gamma_method == 1) then
                                             !> gamma_method = 1: Ref. Section 2.3.1 Formulation of doi:10.7907/ZKW8-ES97.
-                                            Gamma_iL = Cp_iL/(Cp_iL - 1.0_wp)
-                                            Gamma_iR = Cp_iR/(Cp_iR - 1.0_wp)
+                                            Gamma_iL(1:num_species) = Cp_iL(1:num_species)/(Cp_iL(1:num_species) - 1.0_wp)
+                                            Gamma_iR(1:num_species) = Cp_iR(1:num_species)/(Cp_iR(1:num_species) - 1.0_wp)
 
-                                            gamma_L = sum(Xs_L(:)/(Gamma_iL(:) - 1.0_wp))
-                                            gamma_R = sum(Xs_R(:)/(Gamma_iR(:) - 1.0_wp))
+                                            gamma_L = sum(Xs_L(1:num_species)/(Gamma_iL(1:num_species) - 1.0_wp))
+                                            gamma_R = sum(Xs_R(1:num_species)/(Gamma_iR(1:num_species) - 1.0_wp))
                                         else if (chem_params%gamma_method == 2) then
                                             !> gamma_method = 2: c_p / c_v where c_p, c_v are specific heats.
-                                            call get_mixture_specific_heat_cp_mass(T_L, Ys_L, Cp_L)
-                                            call get_mixture_specific_heat_cp_mass(T_R, Ys_R, Cp_R)
-                                            call get_mixture_specific_heat_cv_mass(T_L, Ys_L, Cv_L)
-                                            call get_mixture_specific_heat_cv_mass(T_R, Ys_R, Cv_R)
-
                                             Gamm_L = Cp_L/Cv_L; Gamm_R = Cp_R/Cv_R
                                             gamma_L = 1.0_wp/(Gamm_L - 1.0_wp); gamma_R = 1.0_wp/(Gamm_R - 1.0_wp)
                                         end if
-
-                                        call get_mixture_energy_mass(T_L, Ys_L, E_L)
-                                        call get_mixture_energy_mass(T_R, Ys_R, E_R)
 
                                         E_L = rho_L*E_L + 5.e-1*rho_L*vel_L_rms
                                         E_R = rho_R*E_R + 5.e-1*rho_R*vel_R_rms
                                         H_L = (E_L + pres_L)/rho_L
                                         H_R = (E_R + pres_R)/rho_R
                                     else
-                                        E_L = gamma_L*pres_L + pi_inf_L + 5.e-1*rho_L*vel_L_rms + qv_L
-                                        E_R = gamma_R*pres_R + pi_inf_R + 5.e-1*rho_R*vel_R_rms + qv_R
+                                        call s_compute_energy(pres_L, alpha_rho_L, alpha_lim_L, vel_L_rms, E_L)
+                                        call s_compute_energy(pres_R, alpha_rho_R, alpha_lim_R, vel_R_rms, E_R)
 
                                         H_L = (E_L + pres_L)/rho_L
                                         H_R = (E_R + pres_R)/rho_R
@@ -1069,18 +1083,34 @@ contains
                                         H_R = (E_R + pres_R)/rho_R
                                     #:endif
 
-                                    @:compute_average_state()
+                                    ! Only the pressure-based wave-speed estimate reads the averaged state, and the Roe
+                                    ! average costs eight square roots per face.
+                                    if (wave_speeds == wave_speeds_pressure) then
+                                        call s_compute_average_state(rho_L, rho_R, vel_L, vel_R, H_L, H_R, gamma_L, gamma_R, &
+                                                                     & qv_L, qv_R, rho_avg, vel_avg_rms, H_avg, gamma_avg, qv_avg)
+                                        if (chemistry .and. avg_state == avg_state_roe) then
+                                            R_species(1:num_species) = gas_constant/molecular_weights
+                                            call get_species_enthalpies_rt(T_L, h_iL)
+                                            call get_species_enthalpies_rt(T_R, h_iR)
+                                            h_iL(1:num_species) = h_iL(1:num_species)*R_species(1:num_species)*T_L
+                                            h_iR(1:num_species) = h_iR(1:num_species)*R_species(1:num_species)*T_R
+                                            call s_compute_chemistry_average_state(rho_L, rho_R, T_L, T_R, Ys_L, Ys_R, R_species, &
+                                                                                   & h_iL, h_iR, Cp_iL, Cp_iR, vel_avg_rms, &
+                                                                                   & gamma_avg, c_sum_Yi_Phi)
+                                        end if
+                                    end if
 
-                                    call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, H_L, alpha_L, vel_L_rms, &
-                                                                  & 0._wp, c_L, qv_L)
+                                    call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, alpha_L, c_L, alpha_rho_L)
 
-                                    call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, H_R, alpha_R, vel_R_rms, &
-                                                                  & 0._wp, c_R, qv_R)
+                                    call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, alpha_R, c_R, alpha_rho_R)
 
-                                    !> The computation of c_avg does not require all the variables, and therefore the non '_avg'
-                                    !  variables are placeholders to call the subroutine.
-                                    call s_compute_speed_of_sound(pres_R, rho_avg, gamma_avg, pi_inf_R, H_avg, alpha_R, &
-                                                                  & vel_avg_rms, c_sum_Yi_Phi, c_avg, qv_avg)
+                                    ! Only the pressure-based wave-speed estimate reads the averaged state, and building it
+                                    ! costs eight square roots per face under the Roe average.
+                                    if (wave_speeds == wave_speeds_pressure) then
+                                        call s_compute_speed_of_sound_avg(pres_R, rho_avg, gamma_avg, pi_inf_R, qv_avg, &
+                                                                          & vel_avg_rms, H_avg, c_sum_Yi_Phi, alpha_R, c_avg, &
+                                                                          & alpha_rho_R)
+                                    end if
 
                                     if (viscous) then
                                         if (chemistry) then
@@ -1101,13 +1131,21 @@ contains
 
                                     ! Low Mach correction
                                     if (low_Mach == 2) then
-                                        @:compute_low_Mach_correction()
+                                        call s_apply_low_Mach_velocity(vel_L_rms, vel_R_rms, c_L, c_R, vel_L(dir_idx(1)), &
+                                                                       & vel_R(dir_idx(1)))
                                     end if
 
                                     if (wave_speeds == wave_speeds_direct) then
                                         #:if HYPO
                                             ! Elastic wave speed, Rodriguez et al. JCP (2019)
-                                            @:compute_elastic_wave_speeds_lr()
+                                            s_L = min(vel_L(dir_idx(1)) - f_elastic_signal_speed(c_L, G_L, &
+                                                      & tau_e_L(dir_idx_tau(1)), rho_L), &
+                                                      & vel_R(dir_idx(1)) - f_elastic_signal_speed(c_R, G_R, &
+                                                      & tau_e_R(dir_idx_tau(1)), rho_R))
+                                            s_R = max(vel_R(dir_idx(1)) + f_elastic_signal_speed(c_R, G_R, &
+                                                      & tau_e_R(dir_idx_tau(1)), rho_R), &
+                                                      & vel_L(dir_idx(1)) + f_elastic_signal_speed(c_L, G_L, &
+                                                      & tau_e_L(dir_idx_tau(1)), rho_L))
                                             s_S = (pres_R - tau_e_R(dir_idx_tau(1)) - pres_L + tau_e_L(dir_idx_tau(1)) &
                                                    & + rho_L*vel_L(dir_idx(1))*(s_L - vel_L(dir_idx(1))) - rho_R*vel_R(dir_idx(1)) &
                                                    & *(s_R - vel_R(dir_idx(1))))/(rho_L*(s_L - vel_L(dir_idx(1))) - rho_R*(s_R &
@@ -1126,11 +1164,13 @@ contains
 
                                         ! Low Mach correction: Thornber et al. JCP (2008)
                                         Ms_L = max(1._wp, &
-                                                   & sqrt(1._wp + ((5.e-1_wp + gamma_L)/(1._wp + gamma_L))*(pres_SL/pres_L &
-                                                   & - 1._wp)*pres_L/((pres_L + pi_inf_L/(1._wp + gamma_L)))))
+                                                   & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_L) + 1._wp) &
+                                                   & /f_isentrope_exponent(gamma_L)*(pres_SL - pres_L)/(pres_L &
+                                                   & + f_isentrope_pressure(pi_inf_L, gamma_L))))
                                         Ms_R = max(1._wp, &
-                                                   & sqrt(1._wp + ((5.e-1_wp + gamma_R)/(1._wp + gamma_R))*(pres_SR/pres_R &
-                                                   & - 1._wp)*pres_R/((pres_R + pi_inf_R/(1._wp + gamma_R)))))
+                                                   & sqrt(1._wp + 5.e-1_wp*(f_isentrope_exponent(gamma_R) + 1._wp) &
+                                                   & /f_isentrope_exponent(gamma_R)*(pres_SR - pres_R)/(pres_R &
+                                                   & + f_isentrope_pressure(pi_inf_R, gamma_R))))
 
                                         s_L = vel_L(dir_idx(1)) - c_L*Ms_L
                                         s_R = vel_R(dir_idx(1)) + c_R*Ms_R
@@ -1153,11 +1193,8 @@ contains
                                     xi_P = (5.e-1_wp - sign(5.e-1_wp, s_S))
 
                                     ! Low Mach correction
-                                    if (low_Mach == 1) then
-                                        @:compute_low_Mach_correction()
-                                    else
-                                        pcorr = 0._wp
-                                    end if
+                                    pcorr = f_low_Mach_pcorr_hllc(vel_L_rms, vel_R_rms, c_L, c_R, rho_L, rho_R, s_L, s_R, &
+                                                                  & vel_L(dir_idx(1)), vel_R(dir_idx(1)))
 
                                     #:if HYPO
                                         if (n == 0) then
@@ -1286,6 +1323,23 @@ contains
                                             flux_rsx_vf(${SF('')}$, &
                                                         & eqn_idx%stress%end) = xi_M*rho_L*tau_qq_L*(vel_L(dir_idx(1)) &
                                                         & + s_M*(xi_L - 1._wp)) + xi_P*rho_R*tau_qq_R*(vel_R(dir_idx(1)) &
+                                                        & + s_P*(xi_R - 1._wp))
+                                        end if
+
+                                        ! Damage flux: U_D = m_s*D (damageable-solid partial mass)
+                                        if (cont_damage) then
+                                            solid_partial_density_L = 0._wp; solid_partial_density_R = 0._wp
+                                            $:GPU_LOOP(parallelism='[seq]')
+                                            do i = 1, num_fluids
+                                                if (Gs_rs(i) > verysmall) then
+                                                    solid_partial_density_L = solid_partial_density_L + alpha_rho_L(i)
+                                                    solid_partial_density_R = solid_partial_density_R + alpha_rho_R(i)
+                                                end if
+                                            end do
+                                            flux_rsx_vf(${SF('')}$, &
+                                                        & eqn_idx%damage) &
+                                                        & = xi_M*solid_partial_density_L*damage_L*(vel_L(dir_idx(1)) + s_M*(xi_L &
+                                                        & - 1._wp)) + xi_P*solid_partial_density_R*damage_R*(vel_R(dir_idx(1)) &
                                                         & + s_P*(xi_R - 1._wp))
                                         end if
 

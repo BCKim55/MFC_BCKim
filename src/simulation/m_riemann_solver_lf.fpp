@@ -5,7 +5,6 @@
 !> @brief Lax-Friedrichs (Rusanov) approximate Riemann solver
 #:include 'case.fpp'
 #:include 'macros.fpp'
-#:include 'inline_riemann.fpp'
 
 module m_riemann_solver_lf
 
@@ -13,8 +12,8 @@ module m_riemann_solver_lf
     use m_global_parameters
     use m_variables_conversion
     use m_constants, only: riemann_solver_hll, riemann_solver_hllc, riemann_solver_lax_friedrichs
-    use m_thermochem, only: gas_constant, get_mixture_molecular_weight, get_mixture_specific_heat_cv_mass, &
-        & get_mixture_energy_mass, get_species_specific_heats_r, get_mixture_specific_heat_cp_mass, molecular_weights
+    use m_thermochem, only: gas_constant, get_mixture_molecular_weight, molecular_weights
+    use m_thermochem_state, only: get_mixture_caloric_state
     use m_riemann_state
 
     implicit none
@@ -38,12 +37,11 @@ contains
         type(int_bounds_info), intent(in)                      :: ix, iy, iz
 
         #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(3)    :: alpha_rho_L, alpha_rho_R
-            real(wp), dimension(3)    :: vel_L, vel_R
-            real(wp), dimension(3)    :: alpha_L, alpha_R
-            real(wp), dimension(10)   :: Ys_L, Ys_R
-            real(wp), dimension(10)   :: Cp_iL, Cp_iR, Xs_L, Xs_R, Gamma_iL, Gamma_iR
-            real(wp), dimension(10)   :: Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2
+            real(wp), dimension(3) :: alpha_rho_L, alpha_rho_R
+            real(wp), dimension(3) :: vel_L, vel_R
+            real(wp), dimension(3) :: alpha_L, alpha_R
+            real(wp), dimension(${AMD_NUM_SPECIES_MAX}$) :: Ys_L, Ys_R
+            real(wp), dimension(${AMD_NUM_SPECIES_MAX}$) :: Cp_iL, Cp_iR, Xs_L, Xs_R, Gamma_iL, Gamma_iR
             real(wp), dimension(3, 3) :: vel_grad_L, vel_grad_R  !< Averaged velocity gradient tensor `d(vel_i)/d(coord_j)`.
         #:else
             real(wp), dimension(num_fluids)  :: alpha_rho_L, alpha_rho_R
@@ -51,15 +49,12 @@ contains
             real(wp), dimension(num_fluids)  :: alpha_L, alpha_R
             real(wp), dimension(num_species) :: Ys_L, Ys_R
             real(wp), dimension(num_species) :: Cp_iL, Cp_iR, Xs_L, Xs_R, Gamma_iL, Gamma_iR
-            real(wp), dimension(num_species) :: Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2
             !> Averaged velocity gradient tensor `d(vel_i)/d(coord_j)`.
             real(wp), dimension(num_dims, num_dims) :: vel_grad_L, vel_grad_R
         #:endif
         real(wp) :: rho_L, rho_R
         real(wp) :: pres_L, pres_R
         real(wp) :: E_L, E_R
-        real(wp) :: H_L, H_R
-        real(wp) :: Cp_avg, Cv_avg, T_avg, eps, c_sum_Yi_Phi
         real(wp) :: T_L, T_R
         real(wp) :: Y_L, Y_R
         real(wp) :: MW_L, MW_R
@@ -72,18 +67,11 @@ contains
         real(wp) :: qv_L, qv_R
         real(wp) :: c_L, c_R
         real(wp), dimension(2) :: Re_L, Re_R
-        real(wp) :: rho_avg
-        real(wp) :: H_avg
-        real(wp) :: gamma_avg
-        real(wp) :: c_avg
-        real(wp) :: s_L, s_R, s_M, s_P, s_S
-        real(wp) :: xi_M, xi_P
+        real(wp) :: s_L, s_R, s_M, s_P
         real(wp) :: ptilde_L, ptilde_R
-        real(wp) :: vel_L_rms, vel_R_rms, vel_avg_rms
-        real(wp) :: vel_L_tmp, vel_R_tmp
-        real(wp) :: Ms_L, Ms_R, pres_SL, pres_SR
+        real(wp) :: vel_L_rms, vel_R_rms
         real(wp) :: alpha_L_sum, alpha_R_sum
-        real(wp) :: zcoef, pcorr  !< low Mach number correction
+        real(wp) :: pcorr  !< low Mach number correction
         integer :: i, j, k, l  !< Generic loop iterators
         integer :: Re_size_loc1, Re_size_loc2  !< host copies of Re_size; amdflang reads the declare-target original stale cross-TU
         integer, dimension(3) :: idx_right_phys  !< Physical (j,k,l) indices for right state.
@@ -103,13 +91,11 @@ contains
             #:set SF = lambda offs: COORDS.format(STENCIL_IDX = SV + offs)
             if (norm_dir == ${NORM_DIR}$) then
                 $:GPU_PARALLEL_LOOP(collapse=3, private='[i, j, k, l, alpha_rho_L, alpha_rho_R, vel_L, vel_R, alpha_L, alpha_R, &
-                                    & Re_L, Re_R, rho_avg, h_avg, gamma_avg, s_L, s_R, s_S, Ys_L, Ys_R, Cp_iL, Cp_iR, Xs_L, Xs_R, &
-                                    & Gamma_iL, Gamma_iR, Yi_avg, Phi_avg, h_iL, h_iR, h_avg_2, pcorr, zcoef, vel_grad_L, &
-                                    & vel_grad_R, idx_right_phys, vel_L_rms, vel_R_rms, vel_avg_rms, vel_L_tmp, vel_R_tmp, Ms_L, &
-                                    & Ms_R, pres_SL, pres_SR, alpha_L_sum, alpha_R_sum, c_avg, pres_L, pres_R, rho_L, rho_R, &
-                                    & gamma_L, gamma_R, pi_inf_L, pi_inf_R, qv_L, qv_R, c_L, c_R, E_L, E_R, H_L, H_R, ptilde_L, &
-                                    & ptilde_R, s_M, s_P, xi_M, xi_P, Cp_avg, Cv_avg, T_avg, eps, c_sum_Yi_Phi, Cp_L, Cp_R, Cv_L, &
-                                    & Cv_R, R_gas_L, R_gas_R, MW_L, MW_R, T_L, T_R, Y_L, Y_R]', firstprivate='[Re_size_loc1, Re_size_loc2]')
+                                    & Re_L, Re_R, s_L, s_R, Ys_L, Ys_R, Cp_iL, Cp_iR, Xs_L, Xs_R, Gamma_iL, Gamma_iR, pcorr, &
+                                    & vel_grad_L, vel_grad_R, idx_right_phys, vel_L_rms, vel_R_rms, alpha_L_sum, alpha_R_sum, &
+                                    & pres_L, pres_R, rho_L, rho_R, gamma_L, gamma_R, pi_inf_L, pi_inf_R, qv_L, qv_R, c_L, c_R, &
+                                    & Gamm_L, Gamm_R, E_L, E_R, ptilde_L, ptilde_R, s_M, s_P, Cp_L, Cp_R, Cv_L, Cv_R, R_gas_L, &
+                                    & R_gas_R, MW_L, MW_R, T_L, T_R, Y_L, Y_R]', firstprivate='[Re_size_loc1, Re_size_loc2]')
                 do l = ${Z_BND}$%beg, ${Z_BND}$%end
                     do k = ${Y_BND}$%beg, ${Y_BND}$%end
                         do j = ${X_BND}$%beg, ${X_BND}$%end
@@ -166,8 +152,8 @@ contains
                                 alpha_R = alpha_R/max(alpha_R_sum, sgm_eps)
                             end if
 
-                            call s_accumulate_mixture_properties(num_fluids, alpha_rho_L, alpha_L, rho_L, gamma_L, pi_inf_L, qv_L)
-                            call s_accumulate_mixture_properties(num_fluids, alpha_rho_R, alpha_R, rho_R, gamma_R, pi_inf_R, qv_R)
+                            call s_compute_mixture_coefficients(alpha_rho_L, alpha_L, rho_L, gamma_L, pi_inf_L, qv_L)
+                            call s_compute_mixture_coefficients(alpha_rho_R, alpha_R, rho_R, gamma_R, pi_inf_R, qv_R)
 
                             if (viscous) then
                                 call s_compute_interface_reynolds(alpha_L, Re_L, Re_size_loc1, Re_size_loc2)
@@ -184,56 +170,42 @@ contains
                                 call get_mixture_molecular_weight(Ys_L, MW_L)
                                 call get_mixture_molecular_weight(Ys_R, MW_R)
 
-                                Xs_L(:) = Ys_L(:)*MW_L/molecular_weights(:)
-                                Xs_R(:) = Ys_R(:)*MW_R/molecular_weights(:)
+                                Xs_L(1:num_species) = Ys_L(1:num_species)*MW_L/molecular_weights(:)
+                                Xs_R(1:num_species) = Ys_R(1:num_species)*MW_R/molecular_weights(:)
 
                                 R_gas_L = gas_constant/MW_L
                                 R_gas_R = gas_constant/MW_R
                                 T_L = pres_L/rho_L/R_gas_L
                                 T_R = pres_R/rho_R/R_gas_R
 
-                                call get_species_specific_heats_r(T_L, Cp_iL)
-                                call get_species_specific_heats_r(T_R, Cp_iR)
+                                call get_mixture_caloric_state(T_L, Ys_L, Cp_iL, Cp_L, Cv_L, E_L)
+                                call get_mixture_caloric_state(T_R, Ys_R, Cp_iR, Cp_R, Cv_R, E_R)
 
                                 if (chem_params%gamma_method == 1) then
                                     ! gamma_method = 1: Ref. Section 2.3.1 Formulation of doi:10.7907/ZKW8-ES97.
-                                    Gamma_iL = Cp_iL/(Cp_iL - 1.0_wp)
-                                    Gamma_iR = Cp_iR/(Cp_iR - 1.0_wp)
+                                    Gamma_iL(1:num_species) = Cp_iL(1:num_species)/(Cp_iL(1:num_species) - 1.0_wp)
+                                    Gamma_iR(1:num_species) = Cp_iR(1:num_species)/(Cp_iR(1:num_species) - 1.0_wp)
 
-                                    gamma_L = sum(Xs_L(:)/(Gamma_iL(:) - 1.0_wp))
-                                    gamma_R = sum(Xs_R(:)/(Gamma_iR(:) - 1.0_wp))
+                                    gamma_L = sum(Xs_L(1:num_species)/(Gamma_iL(1:num_species) - 1.0_wp))
+                                    gamma_R = sum(Xs_R(1:num_species)/(Gamma_iR(1:num_species) - 1.0_wp))
                                 else if (chem_params%gamma_method == 2) then
                                     ! gamma_method = 2: c_p / c_v where c_p, c_v are specific heats.
-                                    call get_mixture_specific_heat_cp_mass(T_L, Ys_L, Cp_L)
-                                    call get_mixture_specific_heat_cp_mass(T_R, Ys_R, Cp_R)
-                                    call get_mixture_specific_heat_cv_mass(T_L, Ys_L, Cv_L)
-                                    call get_mixture_specific_heat_cv_mass(T_R, Ys_R, Cv_R)
-
                                     Gamm_L = Cp_L/Cv_L
                                     gamma_L = 1.0_wp/(Gamm_L - 1.0_wp)
                                     Gamm_R = Cp_R/Cv_R
                                     gamma_R = 1.0_wp/(Gamm_R - 1.0_wp)
                                 end if
 
-                                call get_mixture_energy_mass(T_L, Ys_L, E_L)
-                                call get_mixture_energy_mass(T_R, Ys_R, E_R)
-
                                 E_L = rho_L*E_L + 5.e-1*rho_L*vel_L_rms
                                 E_R = rho_R*E_R + 5.e-1*rho_R*vel_R_rms
-                                H_L = (E_L + pres_L)/rho_L
-                                H_R = (E_R + pres_R)/rho_R
                             else
-                                E_L = gamma_L*pres_L + pi_inf_L + 5.e-1*rho_L*vel_L_rms + qv_L
-                                E_R = gamma_R*pres_R + pi_inf_R + 5.e-1*rho_R*vel_R_rms + qv_R
-                                H_L = (E_L + pres_L)/rho_L
-                                H_R = (E_R + pres_R)/rho_R
+                                call s_compute_energy(pres_L, alpha_rho_L, alpha_L, vel_L_rms, E_L)
+                                call s_compute_energy(pres_R, alpha_rho_R, alpha_R, vel_R_rms, E_R)
                             end if
 
-                            call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, H_L, alpha_L, vel_L_rms, 0._wp, c_L, &
-                                                          & qv_L)
+                            call s_compute_speed_of_sound(pres_L, rho_L, gamma_L, pi_inf_L, alpha_L, c_L, alpha_rho_L)
 
-                            call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, H_R, alpha_R, vel_R_rms, 0._wp, c_R, &
-                                                          & qv_R)
+                            call s_compute_speed_of_sound(pres_R, rho_R, gamma_R, pi_inf_R, alpha_R, c_R, alpha_rho_R)
 
                             s_L = 0._wp; s_R = 0._wp
 
@@ -253,11 +225,7 @@ contains
                             s_R = s_P
 
                             ! Low Mach correction
-                            if (low_Mach == 1) then
-                                @:compute_low_Mach_correction()
-                            else
-                                pcorr = 0._wp
-                            end if
+                            pcorr = f_low_Mach_pcorr_hll(vel_L_rms, vel_R_rms, c_L, c_R, rho_L, rho_R, s_M, s_P)
 
                             ! Mass
                             $:GPU_LOOP(parallelism='[seq]')
