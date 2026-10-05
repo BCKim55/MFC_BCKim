@@ -1009,7 +1009,8 @@ contains
         if (conduction .and. Pr <= 0._wp) Pr = 0.7_wp
         ! power-law viscosity mu = mu0 (T/mu_T_ref)^mu_T_exp: R T = p/rho = cv/gammas T, so T/T_ref = (p/rho) gammas/(cv mu_T_ref)
         if (mu_T_exp > 0._wp) mu_T_scale = fluid_pp(1)%gamma/(fluid_pp(1)%cv*mu_T_ref)
-        $:GPU_UPDATE(device='[conduction, Pr, mu_T_exp, mu_T_scale]')
+        ! ib is read on the device by the IB-face masking of s_compute_heat_conduction
+        $:GPU_UPDATE(device='[conduction, Pr, mu_T_exp, mu_T_scale, ib]')
 
         $:GPU_UPDATE(device='[Bx0]')
 
