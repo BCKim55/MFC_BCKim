@@ -31,7 +31,12 @@ module m_ibm
     ; public :: s_initialize_ibm_module, s_ibm_setup, s_ibm_correct_state, s_ibm_set_isothermal_T, s_ibm_wall_heat_flux, &
         & s_finalize_ibm_module
 
-    real(wp), public            :: ib_wall_heat  !< Heat leaving the gas through isothermal IB surfaces [W], last RHS evaluation
+    real(wp), public :: ib_wall_heat  !< Heat leaving the gas through isothermal IB surfaces [W], last RHS evaluation
+    !> DEBUG (dbg/iso-ib-gpu): wall-heat kernel variant from env MFC_ISO_DBG; 0 original, 1 unrolled face-side loop, 2 unrolled loop
+    !! and the heat summed on the host from a per-cell array instead of a GPU reduction
+    integer                                 :: iso_dbg_mode
+    real(wp), allocatable, dimension(:,:,:) :: iso_q_cell
+    $:GPU_DECLARE(create='[iso_q_cell]')
     type(integer_field), public :: ib_markers
     $:GPU_DECLARE(create='[ib_markers]')
 
@@ -60,6 +65,15 @@ contains
 
     !> Allocates memory for the variables in the IBM module
     impure subroutine s_initialize_ibm_module()
+
+        character(len=16) :: dbg_env
+        integer           :: dbg_len, dbg_stat
+
+        call get_environment_variable('MFC_ISO_DBG', dbg_env, dbg_len, dbg_stat)
+        iso_dbg_mode = 0
+        if (dbg_stat == 0 .and. dbg_len > 0) read (dbg_env, *) iso_dbg_mode
+        if (proc_rank == 0) print '(A,I0)', ' [dbg] MFC_ISO_DBG wall-heat kernel variant = ', iso_dbg_mode
+        @:ALLOCATE(iso_q_cell(0:m, 0:n, 0:p))
 
         if (p > 0) then
             @:ALLOCATE(ib_markers%sf(-buff_size:m+buff_size, -buff_size:n+buff_size, -buff_size:p+buff_size))
@@ -1864,52 +1878,152 @@ contains
 
         type(scalar_field), dimension(sys_size), intent(in)    :: q_prim_vf
         type(scalar_field), dimension(sys_size), intent(inout) :: rhs_vf
-        real(wp)                                               :: coef, th_f, th_g, q_face, vol, width, dist, q_sum
-        integer                                                :: j, k, l, jn, kn, ln, d, s, gbl_id, patch_id
+        real(wp)                                               :: coef, th_f, th_g, q_face, vol, width, dist, q_sum, q_cell
+        integer                                                :: j, k, l, jn, kn, ln, d, s, s2, gbl_id, patch_id
 
         coef = fluid_inv_re(1)*(1._wp + gammas(1))/Pr
         q_sum = 0._wp
-        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, jn, kn, ln, d, s, gbl_id, patch_id, th_f, th_g, q_face, vol, width, &
-                            & dist]', copyin='[coef]', reduction='[[q_sum]]', reductionOp='[+]')
-        do l = 0, p
-            do k = 0, n
-                do j = 0, m
-                    if (ib_markers%sf(j, k, l) == 0) then
-                        th_f = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
-                        vol = dx(j)
-                        if (n > 0) vol = vol*dy(k)
-                        if (p > 0) vol = vol*dz(l)
-                        $:GPU_LOOP(parallelism='[seq]')
-                        do d = 1, num_dims
+        select case (iso_dbg_mode)
+        case (1)
+            $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, jn, kn, ln, d, s, s2, gbl_id, patch_id, th_f, th_g, q_face, vol, &
+                                & width, dist, q_cell]', copyin='[coef]', reduction='[[q_sum]]', reductionOp='[+]')
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        if (ib_markers%sf(j, k, l) == 0) then
+                            th_f = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
+                            vol = dx(j)
+                            if (n > 0) vol = vol*dy(k)
+                            if (p > 0) vol = vol*dz(l)
+                            q_cell = 0._wp
                             $:GPU_LOOP(parallelism='[seq]')
-                            do s = -1, 1, 2
-                                jn = j; kn = k; ln = l
-                                if (d == 1) then
-                                    jn = j + s; dist = abs(x_cc(jn) - x_cc(j)); width = dx(j)
-                                else if (d == 2) then
-                                    kn = k + s; dist = abs(y_cc(kn) - y_cc(k)); width = dy(k)
-                                else
-                                    ln = l + s; dist = abs(z_cc(ln) - z_cc(l)); width = dz(l)
-                                end if
-                                if (ib_markers%sf(jn, kn, ln) /= 0) then
-                                    call s_decode_patch_periodicity(ib_markers%sf(jn, kn, ln), gbl_id)
-                                    call s_get_neighborhood_idx(gbl_id, patch_id)
-                                    if (patch_id > 0) then
-                                        if (patch_ib(patch_id)%Twall > 0._wp) then
-                                            th_g = q_prim_vf(eqn_idx%E)%sf(jn, kn, ln)/q_prim_vf(eqn_idx%cont%beg)%sf(jn, kn, ln)
-                                            q_face = coef*f_mu_T(0.5_wp*(th_g + th_f))*(th_g - th_f)/dist  ! flux into the fluid cell
-                                            rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + q_face/width
-                                            q_sum = q_sum - q_face*vol/width
+                            do d = 1, num_dims
+                                $:GPU_LOOP(parallelism='[seq]')
+                                do s2 = 0, 1
+                                    s = 2*s2 - 1
+                                    jn = j; kn = k; ln = l
+                                    if (d == 1) then
+                                        jn = j + s; dist = abs(x_cc(jn) - x_cc(j)); width = dx(j)
+                                    else if (d == 2) then
+                                        kn = k + s; dist = abs(y_cc(kn) - y_cc(k)); width = dy(k)
+                                    else
+                                        ln = l + s; dist = abs(z_cc(ln) - z_cc(l)); width = dz(l)
+                                    end if
+                                    if (ib_markers%sf(jn, kn, ln) /= 0) then
+                                        call s_decode_patch_periodicity(ib_markers%sf(jn, kn, ln), gbl_id)
+                                        call s_get_neighborhood_idx(gbl_id, patch_id)
+                                        if (patch_id > 0) then
+                                            if (patch_ib(patch_id)%Twall > 0._wp) then
+                                                th_g = q_prim_vf(eqn_idx%E)%sf(jn, kn, ln)/q_prim_vf(eqn_idx%cont%beg)%sf(jn, kn, &
+                                                                 & ln)
+                                                q_face = coef*f_mu_T(0.5_wp*(th_g + th_f))*(th_g - th_f)/dist
+                                                rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + q_face/width
+                                                q_cell = q_cell - q_face*vol/width
+                                            end if
                                         end if
                                     end if
-                                end if
+                                end do
                             end do
-                        end do
-                    end if
+                            q_sum = q_sum + q_cell
+                        end if
+                    end do
                 end do
             end do
-        end do
-        $:END_GPU_PARALLEL_LOOP()
+            $:END_GPU_PARALLEL_LOOP()
+        case (2)
+            $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, jn, kn, ln, d, s, s2, gbl_id, patch_id, th_f, th_g, q_face, vol, &
+                                & width, dist, q_cell]', copyin='[coef]')
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        iso_q_cell(j, k, l) = 0._wp
+                        if (ib_markers%sf(j, k, l) == 0) then
+                            th_f = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
+                            vol = dx(j)
+                            if (n > 0) vol = vol*dy(k)
+                            if (p > 0) vol = vol*dz(l)
+                            q_cell = 0._wp
+                            $:GPU_LOOP(parallelism='[seq]')
+                            do d = 1, num_dims
+                                $:GPU_LOOP(parallelism='[seq]')
+                                do s2 = 0, 1
+                                    s = 2*s2 - 1
+                                    jn = j; kn = k; ln = l
+                                    if (d == 1) then
+                                        jn = j + s; dist = abs(x_cc(jn) - x_cc(j)); width = dx(j)
+                                    else if (d == 2) then
+                                        kn = k + s; dist = abs(y_cc(kn) - y_cc(k)); width = dy(k)
+                                    else
+                                        ln = l + s; dist = abs(z_cc(ln) - z_cc(l)); width = dz(l)
+                                    end if
+                                    if (ib_markers%sf(jn, kn, ln) /= 0) then
+                                        call s_decode_patch_periodicity(ib_markers%sf(jn, kn, ln), gbl_id)
+                                        call s_get_neighborhood_idx(gbl_id, patch_id)
+                                        if (patch_id > 0) then
+                                            if (patch_ib(patch_id)%Twall > 0._wp) then
+                                                th_g = q_prim_vf(eqn_idx%E)%sf(jn, kn, ln)/q_prim_vf(eqn_idx%cont%beg)%sf(jn, kn, &
+                                                                 & ln)
+                                                q_face = coef*f_mu_T(0.5_wp*(th_g + th_f))*(th_g - th_f)/dist
+                                                rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + q_face/width
+                                                q_cell = q_cell - q_face*vol/width
+                                            end if
+                                        end if
+                                    end if
+                                end do
+                            end do
+                            iso_q_cell(j, k, l) = q_cell
+                        end if
+                    end do
+                end do
+            end do
+            $:END_GPU_PARALLEL_LOOP()
+            $:GPU_UPDATE(host='[iso_q_cell]')
+            q_sum = sum(iso_q_cell)
+        case default
+            $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, jn, kn, ln, d, s, gbl_id, patch_id, th_f, th_g, q_face, vol, &
+                                & width, dist]', copyin='[coef]', reduction='[[q_sum]]', reductionOp='[+]')
+            do l = 0, p
+                do k = 0, n
+                    do j = 0, m
+                        if (ib_markers%sf(j, k, l) == 0) then
+                            th_f = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
+                            vol = dx(j)
+                            if (n > 0) vol = vol*dy(k)
+                            if (p > 0) vol = vol*dz(l)
+                            $:GPU_LOOP(parallelism='[seq]')
+                            do d = 1, num_dims
+                                $:GPU_LOOP(parallelism='[seq]')
+                                do s = -1, 1, 2
+                                    jn = j; kn = k; ln = l
+                                    if (d == 1) then
+                                        jn = j + s; dist = abs(x_cc(jn) - x_cc(j)); width = dx(j)
+                                    else if (d == 2) then
+                                        kn = k + s; dist = abs(y_cc(kn) - y_cc(k)); width = dy(k)
+                                    else
+                                        ln = l + s; dist = abs(z_cc(ln) - z_cc(l)); width = dz(l)
+                                    end if
+                                    if (ib_markers%sf(jn, kn, ln) /= 0) then
+                                        call s_decode_patch_periodicity(ib_markers%sf(jn, kn, ln), gbl_id)
+                                        call s_get_neighborhood_idx(gbl_id, patch_id)
+                                        if (patch_id > 0) then
+                                            if (patch_ib(patch_id)%Twall > 0._wp) then
+                                                th_g = q_prim_vf(eqn_idx%E)%sf(jn, kn, ln)/q_prim_vf(eqn_idx%cont%beg)%sf(jn, kn, &
+                                                                 & ln)
+                                                ! flux into the fluid cell
+                                                q_face = coef*f_mu_T(0.5_wp*(th_g + th_f))*(th_g - th_f)/dist
+                                                rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + q_face/width
+                                                q_sum = q_sum - q_face*vol/width
+                                            end if
+                                        end if
+                                    end if
+                                end do
+                            end do
+                        end if
+                    end do
+                end do
+            end do
+            $:END_GPU_PARALLEL_LOOP()
+        end select
         ib_wall_heat = q_sum
 
     end subroutine s_ibm_wall_heat_flux
@@ -1943,6 +2057,7 @@ contains
         integer :: i
 
         @:DEALLOCATE(ib_markers%sf)
+        @:DEALLOCATE(iso_q_cell)
         @:DEALLOCATE(corrected_gps%sf)
         @:DEALLOCATE(ib_gbl_idx_lookup)
         do i = 1, num_ib_airfoils_max
