@@ -344,6 +344,7 @@ contains
             patch_ib(i)%inj_species = 0
             patch_ib(i)%burn_rate_exp = 0._wp
             patch_ib(i)%burn_rate_pref = 0._wp
+            patch_ib(i)%Twall = dflt_real
 
             ! Variables to handle moving immersed boundaries, defaulting to no movement
             patch_ib(i)%moving_ibm = 0
@@ -388,6 +389,7 @@ contains
             particle_cloud(i)%min_spacing = 0._wp
             particle_cloud(i)%shell_inner_radius = dflt_real
             particle_cloud(i)%shell_outer_radius = dflt_real
+            particle_cloud(i)%Twall = dflt_real
             particle_cloud(i)%moving_ibm = 0
             particle_cloud(i)%seed = 0
             particle_cloud(i)%cloud_geometry = 1

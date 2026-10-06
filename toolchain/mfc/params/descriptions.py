@@ -379,6 +379,7 @@ PATTERNS = [
     (r"patch_ib\((\d+)\)%angular_vel\((\d+)\)", "Angular velocity component {1} for IB patch {0}"),
     (r"patch_ib\((\d+)\)%angles\((\d+)\)", "Orientation angle {1} for IB patch {0}"),
     (r"patch_ib\((\d+)\)%slip", "Enable slip condition for IB patch {0}"),
+    (r"patch_ib\((\d+)\)%Twall", "Isothermal surface temperature of IB patch {0} (<= 0: adiabatic)"),
     (r"patch_ib\((\d+)\)%moving_ibm", "Enable moving boundary for IB patch {0}"),
     (r"patch_ib\((\d+)\)%kin_model", "Prescribed kinematics model for IB patch {0} (0 off, 1 hinged roll+pitch flapping, 2 smoothed pitch ramp)"),
     (r"patch_ib\((\d+)\)%kin_hinge\((\d+)\)", "Hinge point component {1} for IB patch {0} kinematics"),

@@ -171,7 +171,7 @@ contains
         do i = 1, num_ibs
             #:for VAR in [ 'radius', 'length_x', 'length_y', 'length_z', &
                 & 'x_centroid', 'y_centroid', 'z_centroid', 'slip', 'mass', 'v_blow', &
-                & 'burn_rate_exp', 'burn_rate_pref']
+                & 'burn_rate_exp', 'burn_rate_pref', 'Twall']
                 call MPI_BCAST(patch_ib(i)%${VAR}$, 1, mpi_p, 0, MPI_COMM_WORLD, ierr)
             #:endfor
             #:for VAR in ['vel', 'angular_vel', 'angles', 'kin_hinge', 'kin_offset']
@@ -208,7 +208,7 @@ contains
         ! manual: particle_cloud (runtime loop to num_particle_clouds; irregular member subset)
         do i = 1, num_particle_clouds
             #:for VAR in ['x_centroid', 'y_centroid', 'z_centroid', 'length_x', 'length_y', 'length_z', &
-                & 'radius', 'mass', 'min_spacing', 'shell_inner_radius', 'shell_outer_radius']
+                & 'radius', 'mass', 'min_spacing', 'shell_inner_radius', 'shell_outer_radius', 'Twall']
                 call MPI_BCAST(particle_cloud(i)%${VAR}$, 1, mpi_p, 0, MPI_COMM_WORLD, ierr)
             #:endfor
             call MPI_BCAST(particle_cloud(i)%num_particles, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)

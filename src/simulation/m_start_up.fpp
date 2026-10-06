@@ -1198,6 +1198,7 @@ contains
         ib_patch%inj_species = 0
         ib_patch%burn_rate_exp = 0._wp
         ib_patch%burn_rate_pref = 0._wp
+        ib_patch%Twall = particle_cloud(cloud_idx)%Twall
         ! Selector for the prescribed-kinematics block; zero leaves the eleven kin_* reals unread.
         ib_patch%kin_model = 0
 

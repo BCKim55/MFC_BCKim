@@ -219,7 +219,8 @@ PHYSICS_DOCS = {
             "thermal-equilibrium mixture temperature is undefined without it). Only the stiffened-gas and "
             "ideal-gas equations of state are supported, and only model_eqns = 2 (5-equation) or 3 (6-equation): "
             "the mixture conductivity is weighted by the volume fractions those models carry, which model_eqns = 1 "
-            "does not have. Not supported with igr or chemistry (which carries its own mixture-averaged conduction)."
+            "does not have. Not supported with igr or chemistry (which carries its own mixture-averaged conduction). "
+            "An isothermal immersed boundary (patch_ib(i)%Twall or particle_cloud(i)%Twall > 0) requires it and num_fluids = 1."
         ),
     },
     # Feature Compatibility
@@ -1514,6 +1515,14 @@ class CaseValidator:
             heat_conduction and chemistry,
             "heat conduction is not supported with chemistry: the reacting path already carries mixture-averaged conduction through chem_params%diffusion",
         )
+
+        # Isothermal immersed surfaces: the ghost density is rebuilt for a single fluid from the reflected temperature,
+        # and the wall heat flux is the Fourier conduction flux across the fluid/ghost faces.
+        tw = [self.get(f"patch_ib({i})%Twall") for i in range(1, (self.get("num_ibs") or 0) + 1)]
+        tw += [self.get(f"particle_cloud({i})%Twall") for i in range(1, (self.get("num_particle_clouds") or 0) + 1)]
+        if any(t is not None and t > 0 for t in tw):
+            self.prohibit(not heat_conduction, "an isothermal IB (Twall > 0) requires Fourier conduction: set fluid_pp(1)%k_therm > 0")
+            self.prohibit(num_fluids != 1, "an isothermal IB (Twall > 0) requires num_fluids = 1")
 
     def check_non_newtonian(self):
         """Checks constraints on non-Newtonian (Herschel-Bulkley) parameters (simulation)"""
