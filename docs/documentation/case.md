@@ -364,6 +364,7 @@ This is enabled by adding ``'elliptic_smoothing': "T",`` and ``'elliptic_smoothi
 | `model_id`           | Integer | Index into `stl_models` array for STL/OBJ geometry patches. |
 | `slip`               | Logical | Apply a slip boundary |
 | `moving_ibm`         | Integer | Sets the method used for IB movement. |
+| `Twall`              | Real    | Isothermal surface temperature; `<= 0` (default) keeps the surface adiabatic. |
 | `vel(i)`             | Real    | Initial velocity of the moving IB in the i-th direction. |
 | `angular_vel(i)`     | Real    | Initial angular velocity of the moving IB in the i-th direction. |
 | `kin_model`          | Integer | Prescribed kinematics (requires `moving_ibm = 1`, 3D): [0] off; [1] hinged flapping (roll + pitch); [2] smoothed pitch ramp and hold. |
@@ -413,6 +414,8 @@ Additional details on this specification can be found in [NACA airfoil](https://
 
 - `slip` applies a slip boundary to the surface of the patch if true and a no-slip boundary condition to the surface if false.
 
+- `Twall` holds the surface of the patch at a fixed temperature. The ghost-point temperature is the reflection of the image-point temperature about `Twall`, floored at `Twall/2`, and the ghost density is rebuilt from the mirrored pressure so the ghost state satisfies the equation of state; the wall heat flux is then the conduction flux across the fluid/ghost faces. Without chemistry it requires a conduction path (`fluid_pp(1)%%k_therm > 0`, or this branch's `conduction = T`), `fluid_pp(1)%%cv > 0` and `num_fluids = 1`. `Twall <= 0` (the default) leaves the surface adiabatic.
+
 - For STL/OBJ geometry (geometry 5 or 12), set `model_id` to index into the `stl_models` array and specify `model_filepath`, `model_scale`, `model_translate`, and `model_threshold` on that entry.
 
 - `moving_ibm` sets the method by which movement will be applied to the immersed boundary. Using 0 will result in no movement. Using 1 will result 1-way coupling where the boundary moves at a constant rate and applied forces to the fluid based upon its own motion. In 1-way coupling, the fluid does not apply forces back onto the IB. Using 2 will result in 2-way coupling, where the boundary pushes on the fluid and the fluid pushes back on the boundary via pressure and viscous forces. If external forces are applied, the boundary will also experience those forces.
@@ -460,7 +463,7 @@ A particle cloud is a compact specification of a bed of identical circular (2D) 
 | `moving_ibm`      | Integer | Motion flag applied to every particle (see `patch_ib(j)%%moving_ibm`). |
 | `seed`            | Integer | Random seed for reproducible placement (used by `packing_method = 1`). |
 | `packing_method`  | Integer | Algorithm used to place the particles. |
-| `Twall`           | Real    | Isothermal surface temperature [K] of every particle (`<= 0`: adiabatic). Without chemistry it requires `conduction` and `fluid_pp(1)%%cv`. |
+| `Twall`           | Real    | Isothermal surface temperature [K] of every particle (`<= 0`: adiabatic; see `patch_ib(j)%%Twall`). |
 
 - `cloud_geometry` selects the cloud region:
   - `1` (box) uses `x[y,z]_centroid` and `length_x[y,z]` to define the region.

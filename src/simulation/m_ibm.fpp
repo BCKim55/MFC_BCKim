@@ -276,7 +276,7 @@ contains
         #:endif
         real(wp) :: alpha_q, alpha_rho_q, e_q
         real(wp) :: T_IP, mw_IP, e_IP  !< Image-point temperature, mixture MW, and mass-specific internal energy (chemistry)
-        real(wp) :: th_w               !< R*Twall of an isothermal patch (p/rho at the wall)
+        real(wp) :: T_GP               !< Ghost-point temperature of an isothermal patch
         ! Primitive variables at the image point associated with a ghost point, interpolated from surrounding fluid cells.
 
         real(wp), dimension(3) :: physical_loc   !< Physical loc of GP
@@ -319,7 +319,7 @@ contains
             $:GPU_PARALLEL_LOOP(private='[i, physical_loc, dyn_pres, alpha_rho_IP, alpha_IP, alpha_rho_GP, pres_IP, pres_GP, &
                                 & vel_IP, vel_g, r_IP, v_IP, pb_IP, mv_IP, nmom_IP, presb_IP, massv_IP, rho, gamma, pi_inf, Re_K, &
                                 & G_K, Gs, gp, radial_vector, j, k, l, q, qv_K, c_IP, nbub, patch_id, Ys_IP, T_IP, mw_IP, e_IP, &
-                                & vel_sum_g, E_ghost, alpha_q, alpha_rho_q, e_q, th_w]', present='[ghost_points]')
+                                & vel_sum_g, E_ghost, alpha_q, alpha_rho_q, e_q, T_GP]', present='[ghost_points]')
             do i = 1, num_gps
                 gp = ghost_points(i)
                 if (.not. gp%interp_valid) cycle
@@ -361,13 +361,15 @@ contains
                     alpha_rho_IP(1) = pres_IP*mw_IP/(T_IP*gas_constant)
                 end if
 
-                ! Isothermal surface, single perfect gas: reflect p/rho = R*T about R*Twall so the interface
-                ! sits at Twall (ghost and image point are equidistant from the surface), and rebuild the
-                ! ghost density from the mirrored pressure. The energy below is gamma*pres_GP + pi_inf, so
-                ! p = rho*R*T holds at the ghost cell. Floor as in s_ibm_set_isothermal_T.
+                ! Isothermal surface: reflect the image-point temperature about Twall (ghost and image point are
+                ! equidistant from the surface, so the linear profile between them is Twall at the wall) and rebuild the
+                ! ghost density from the mirrored pressure with the closure of f_mixture_temperature, so the ghost state
+                ! carries the reflected temperature for either conduction path (k_therm through q_T_sf, or conduction/Pr
+                ! through p/rho). Floor keeps T_GP positive.
                 if (.not. chemistry .and. patch_ib(patch_id)%Twall > 0._wp) then
-                    th_w = patch_ib(patch_id)%Twall*cvs(1)/gammas(1)
-                    alpha_rho_IP(1) = pres_IP/max(2._wp*th_w - pres_IP/alpha_rho_IP(1), 0.5_wp*th_w)
+                    T_IP = ((gammas(1) + 1._wp)*pres_IP + pi_infs(1))/(alpha_rho_IP(1)*cvs(1)*isentrope_n(1))
+                    T_GP = max(2._wp*patch_ib(patch_id)%Twall - T_IP, 0.5_wp*patch_ib(patch_id)%Twall)
+                    alpha_rho_IP(1) = ((gammas(1) + 1._wp)*pres_IP + pi_infs(1))/(cvs(1)*isentrope_n(1)*T_GP)
                 end if
 
                 ! If in simulation, use acc mixture subroutines
