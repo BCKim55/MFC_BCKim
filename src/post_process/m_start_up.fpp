@@ -246,7 +246,9 @@ contains
             end if
         end if
 
+        lso_step_found = .true.
         call s_read_data_files(t_step)
+        if (lso_filter_wrt .and. .not. lso_step_found) return
 
         if (chemistry) call s_compute_q_T_sf(q_T_sf, q_cons_vf, idwbuff)
 

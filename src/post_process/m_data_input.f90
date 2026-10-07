@@ -41,6 +41,9 @@ module m_data_input
     type(scalar_field), public                               :: q_T_sf     !< Temperature field
     ! type(scalar_field), public :: ib_markers !<
     type(integer_field), public :: ib_markers
+    !> False when the LSO file for the requested step does not exist (e.g. the initial condition, which pre_process writes
+    !! unfiltered); the caller skips such steps.
+    logical, public :: lso_step_found = .true.
 
     !> Set to .true. after grid coordinates are first loaded; prevents re-opening grid files (x_cb.dat, y_cb.dat, z_cb.dat) via
     !! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) on subsequent calls to s_read_parallel_data_files (e.g. the LSO two-pass write).
@@ -248,10 +251,19 @@ contains
             end if
         end if
 
+        if (lso_filter_wrt) then
+            file_loc = trim(t_step_dir) // '/lso_q_cons_vf1.dat'
+            inquire (FILE=trim(file_loc), EXIST=file_check)
+            if (.not. file_check) then
+                lso_step_found = .false.
+                return
+            end if
+        end if
+
         do i = 1, sys_size
             write (file_num, '(I0)') i
-            ! When reading LSO-filtered data, look for the 'lso_' prefixed files written by simulation on the coarse grid.
-            if (lso_filter_wrt .and. lso_down_sample_factor > 1) then
+            ! LSO-filtered data: the 'lso_' prefixed files the simulation wrote (coarse when downsampled).
+            if (lso_filter_wrt) then
                 file_loc = trim(t_step_dir) // '/lso_q_cons_vf' // trim(file_num) // '.dat'
             else
                 file_loc = trim(t_step_dir) // '/q_cons_vf' // trim(file_num) // '.dat'
@@ -433,12 +445,12 @@ contains
             if (lso_filter_wrt) then
                 file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) // 'lso_' &
                                 & // trim(file_loc_base)
+                ! Absent LSO file (e.g. the initial condition, written unfiltered by pre_process):
+                ! signal the caller to skip this step; the unfiltered file may be on a different grid.
                 inquire (FILE=trim(file_loc), EXIST=file_exist)
                 if (.not. file_exist) then
-                    ! LSO file absent (e.g. initial condition from pre_process): fall back to unfiltered
-                    file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) &
-                                    & // trim(file_loc_base)
-                    inquire (FILE=trim(file_loc), EXIST=file_exist)
+                    lso_step_found = .false.
+                    return
                 end if
             else
                 file_loc = trim(case_dir) // '/restart_data/lustre_' // trim(t_step_string) // trim(mpiiofs) // trim(file_loc_base)
@@ -501,11 +513,12 @@ contains
             write (file_loc_base, '(I0,A)') t_step, '.dat'
             if (lso_filter_wrt) then
                 file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // 'lso_' // trim(file_loc_base)
+                ! Absent LSO file (e.g. the initial condition, written unfiltered by pre_process):
+                ! signal the caller to skip this step; the unfiltered file may be on a different grid.
                 inquire (FILE=trim(file_loc), EXIST=file_exist)
                 if (.not. file_exist) then
-                    ! LSO file absent (e.g. initial condition from pre_process): fall back to unfiltered
-                    file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(file_loc_base)
-                    inquire (FILE=trim(file_loc), EXIST=file_exist)
+                    lso_step_found = .false.
+                    return
                 end if
             else
                 file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(file_loc_base)
