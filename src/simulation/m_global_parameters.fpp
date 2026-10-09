@@ -9,7 +9,7 @@
 module m_global_parameters
 
 #ifdef MFC_MPI
-    use mpi  !< Message passing interface (MPI) module
+    use mpi
 #endif
 
     use m_derived_types
@@ -1002,7 +1002,7 @@ contains
 
         $:GPU_UPDATE(device='[alt_soundspeed, acoustic_source, num_source]')
         $:GPU_UPDATE(device='[dt, sys_size, buff_size, eqn_idx, mpp_lim, bubbles_euler, hypoelasticity, alt_soundspeed, &
-                     & avg_state, model_eqns, mixture_err, grid_geometry, cyl_coord, mp_weno, weno_eps, teno_CT, low_Mach]')
+                     & avg_state, model_eqns, mixture_err, grid_geometry, cyl_coord, mp_weno, weno_eps, teno_CT, low_Mach, ib]')
         $:GPU_UPDATE(device='[riemann_hypo_ADC, ADC_kappa, hll_u_interface, hypo_hll_interface_rhs, hypo_nc_mode]')
 
         ! Fourier conduction: Pr defaults to 0.7 (air) when the case does not set it
