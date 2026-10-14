@@ -668,6 +668,8 @@ def _load():
     _r("collision_time", REAL, {"ib"})
     _r("ib_coefficient_of_friction", REAL, {"ib"})
     _r("many_ib_patch_parallelism", LOG, {"ib"})
+    _r("ib_second_order_vel", LOG, {"ib"})
+    _r("ib_ip_min_dist", REAL, {"ib"})
 
     # Probes
     _r("num_probes", INT, {"probes"})
@@ -1407,6 +1409,8 @@ _nv(
     "num_particle_clouds",
     "ib_neighborhood_radius",
     "many_ib_patch_parallelism",
+    "ib_second_order_vel",
+    "ib_ip_min_dist",
     "particle_cloud",
     "tau_star",
     "cont_damage_s",

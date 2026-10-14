@@ -691,6 +691,11 @@ class CaseValidator:
         self.prohibit(not ib and num_ibs > 0, "num_ibs is set, but ib is not enabled")
         self.prohibit(ib_state_wrt and not ib, "ib_state_wrt requires ib to be enabled")
         self.prohibit(many_ib_patch_parallelism and not ib, "many_ib_patch_parallelism requires ib to be enabled")
+        ib_second_order_vel = self.get("ib_second_order_vel", "F") == "T"
+        ib_ip_min_dist = self.get("ib_ip_min_dist")
+        self.prohibit(ib_second_order_vel and not ib, "ib_second_order_vel requires ib to be enabled")
+        self.prohibit(ib_ip_min_dist is not None and not ib_second_order_vel, "ib_ip_min_dist requires ib_second_order_vel to be enabled")
+        self.prohibit(ib_ip_min_dist is not None and ib_ip_min_dist < 0, "ib_ip_min_dist must be >= 0")
 
         for i in range(1, num_particle_clouds + 1):
             n = self.get("n", 0)

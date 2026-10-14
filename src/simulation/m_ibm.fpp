@@ -64,6 +64,7 @@ contains
         @:ACC_SETUP_SFs(ib_markers)
 
         $:GPU_ENTER_DATA(copyin='[num_gps]')
+        $:GPU_UPDATE(device='[ib_second_order_vel, ib_ip_min_dist]')
 
         if (collision_model > 0) call s_initialize_collisions_module()
 
@@ -275,7 +276,8 @@ contains
                 ! p = rho*R*T holds at the ghost cell. Floor as in s_ibm_set_isothermal_T.
                 if (.not. chemistry .and. patch_ib(patch_id)%Twall > 0._wp) then
                     th_w = patch_ib(patch_id)%Twall*cvs(1)/gammas(1)
-                    alpha_rho_IP(1) = pres_IP/max(2._wp*th_w - pres_IP/alpha_rho_IP(1), 0.5_wp*th_w)
+                    alpha_rho_IP(1) = pres_IP/max(th_w - abs(gp%levelset)/max(gp%ip_dist, &
+                                 & sgm_eps)*(pres_IP/alpha_rho_IP(1) - th_w), 0.5_wp*th_w)
                 end if
 
                 dyn_pres = 0._wp
@@ -300,7 +302,7 @@ contains
                     do q = 1, num_fluids
                         ! Pressure correction for moving IB: accounts for acceleration of IB surface
                         q_prim_vf(eqn_idx%E)%sf(j, k, l) = q_prim_vf(eqn_idx%E)%sf(j, k, &
-                                  & l) + pres_IP/(1._wp - 2._wp*abs(gp%levelset*alpha_rho_IP(q)/pres_IP) &
+                                  & l) + pres_IP/(1._wp - (abs(gp%levelset) + gp%ip_dist)*abs(alpha_rho_IP(q)/pres_IP) &
                                   & *dot_product(patch_ib(patch_id)%force/patch_ib(patch_id)%mass, gp%levelset_norm))
                     end do
                 end if
@@ -371,6 +373,9 @@ contains
                     buf = sqrt(sum(norm**2))
                     if (buf > 0._wp) vel_g = vel_g + v_blow_eff*norm/buf
                 end if
+
+                ! extrapolate linearly through the boundary intercept, Mittal et al. (2008)
+                if (ib_second_order_vel) vel_g = vel_g - abs(gp%levelset)/max(gp%ip_dist, sgm_eps)*(vel_IP - vel_g)
 
                 ! Set momentum
                 $:GPU_LOOP(parallelism='[seq]')
@@ -470,6 +475,7 @@ contains
 
         type(ghost_point), dimension(num_gps), intent(inout) :: ghost_points_in
         real(wp)                                             :: dist
+        real(wp)                                             :: min_cell_width
         real(wp), dimension(3)                               :: norm
         real(wp), dimension(3)                               :: physical_loc
         real(wp)                                             :: temp_loc
@@ -485,8 +491,8 @@ contains
 
         bounds_error = .false.
 
-        $:GPU_PARALLEL_LOOP(private='[q, gp, i, j, k, physical_loc, patch_id, dist, norm, dim, bound, dir, index, temp_loc, &
-                            & s_cc]', copy='[bounds_error]')
+        $:GPU_PARALLEL_LOOP(private='[q, gp, i, j, k, physical_loc, patch_id, dist, min_cell_width, norm, dim, bound, dir, index, &
+                            & temp_loc, s_cc]', copy='[bounds_error]')
         do q = 1, num_gps
             gp = ghost_points_in(q)
             i = gp%loc(1)
@@ -504,7 +510,14 @@ contains
             patch_id = gp%ib_patch_id
             dist = abs(real(gp%levelset, kind=wp))
             norm(:) = gp%levelset_norm
-            ghost_points_in(q)%ip_loc(:) = physical_loc(:) + 2*dist*norm(:)
+            ghost_points_in(q)%ip_dist = dist
+            ! keep the image point stencil off the wall
+            if (ib_second_order_vel) then
+                min_cell_width = min(dx(i), dy(j))
+                if (p > 0) min_cell_width = min(min_cell_width, dz(k))
+                ghost_points_in(q)%ip_dist = max(dist, ib_ip_min_dist*min_cell_width)
+            end if
+            ghost_points_in(q)%ip_loc(:) = physical_loc(:) + (dist + ghost_points_in(q)%ip_dist)*norm(:)
 
             ! Find the closest grid point to the image point
             do dim = 1, num_dims

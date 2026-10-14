@@ -495,6 +495,8 @@ contains
         ib_coefficient_of_friction = dflt_real
         ib_state_wrt = .false.
         many_ib_patch_parallelism = .false.
+        ib_second_order_vel = .false.
+        ib_ip_min_dist = 0._wp
 
         ! Bubble modeling (sim-specific)
         bubble_model = 1

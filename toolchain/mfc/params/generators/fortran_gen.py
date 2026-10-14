@@ -32,6 +32,8 @@ _VALID_TARGETS = ("pre", "sim", "post")
 # Case-optimization parameters are emitted by generated_case_opt_decls.fpp; all
 # other names are emitted by generated_decls.fpp.
 SIM_GPU_DECL_VARS = {
+    "ib_ip_min_dist",
+    "ib_second_order_vel",
     "ADC_kappa",
     "Pr",
     "mu_T_exp",
