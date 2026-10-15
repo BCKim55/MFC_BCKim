@@ -375,7 +375,9 @@ contains
                 end if
 
                 ! extrapolate linearly through the boundary intercept, Mittal et al. (2008)
-                if (ib_second_order_vel) vel_g = vel_g - abs(gp%levelset)/max(gp%ip_dist, sgm_eps)*(vel_IP - vel_g)
+                ! (only where the image point samples fluid: a buried one would mirror a neighbour's ghost values)
+                if (ib_second_order_vel .and. gp%interp_valid) vel_g = vel_g - abs(gp%levelset)/max(gp%ip_dist, &
+                    & sgm_eps)*(vel_IP - vel_g)
 
                 ! Set momentum
                 $:GPU_LOOP(parallelism='[seq]')
@@ -718,8 +720,9 @@ contains
         integer                                              :: q, i, j, k, ii, jj, kk  !< Grid indexes and iterators
         integer                                              :: patch_id
         logical                                              :: is_cell_center
+        logical                                              :: ip_valid                !< some stencil cell is fluid
 
-        $:GPU_PARALLEL_LOOP(private='[q, i, j, k, ii, jj, kk, dist, buf, gp, interp_coeffs, eta, alpha, patch_id, is_cell_center]')
+        $:GPU_PARALLEL_LOOP(private='[q, i, j, k, ii, jj, kk, dist, buf, gp, interp_coeffs, eta, alpha, patch_id, is_cell_center, ip_valid]')
         do q = 1, num_gps
             gp = ghost_points_in(q)
             ! Get the interpolation points
@@ -756,12 +759,14 @@ contains
                     if (dist(ii + 1, jj + 1, 1) <= 1.e-16_wp) then
                         interp_coeffs(ii + 1, jj + 1, 1) = 1._wp
                         is_cell_center = .true.
+                        ip_valid = ib_markers%sf(i + ii, j + jj, k) == 0
                         exit check_is_cell_center
                     else
                         if (p /= 0) then
                             if (dist(ii + 1, jj + 1, 2) <= 1.e-16_wp) then
                                 interp_coeffs(ii + 1, jj + 1, 2) = 1._wp
                                 is_cell_center = .true.
+                                ip_valid = ib_markers%sf(i + ii, j + jj, k + 1) == 0
                                 exit check_is_cell_center
                             end if
                         end if
@@ -781,6 +786,7 @@ contains
                 if (p == 0) then
                     eta(:,:,1) = 1._wp/dist(:,:,1)**2
                     buf = sum(alpha(:,:,1)*eta(:,:,1))
+                    ip_valid = buf > 0._wp
                     if (buf > 0._wp) then
                         interp_coeffs(:,:,1) = alpha(:,:,1)*eta(:,:,1)/buf
                     else
@@ -794,6 +800,7 @@ contains
                     if (ib_markers%sf(i + 1, j + 1, k + 1) /= 0) alpha(2, 2, 2) = 0._wp
                     eta = 1._wp/dist**2
                     buf = sum(alpha*eta)
+                    ip_valid = buf > 0._wp
 
                     if (buf > 0._wp) then
                         interp_coeffs = alpha*eta/buf
@@ -805,6 +812,7 @@ contains
             end if
 
             ghost_points_in(q)%interp_coeffs = interp_coeffs
+            ghost_points_in(q)%interp_valid = ip_valid
         end do
         $:END_GPU_PARALLEL_LOOP()
 
