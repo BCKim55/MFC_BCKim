@@ -10,6 +10,7 @@ module m_helper
 
     use m_derived_types
     use m_global_parameters
+    use m_constants, only: BC_PERIODIC
     use ieee_arithmetic  !< For checking NaN
 
     implicit none
@@ -18,7 +19,8 @@ module m_helper
     public :: s_comp_n_from_prim, s_comp_n_from_cons, s_initialize_bubbles_model, s_initialize_nonpoly, s_simpson, s_transcoeff, &
         & s_int_to_str, s_transform_vec, s_transform_triangle, s_transform_model, s_swap, f_cross, f_create_transform_matrix, &
         & f_create_bbox, s_print_2D_array, f_xor, f_logical_to_int, associated_legendre, real_ylm, double_factorial, factorial, &
-        & f_cut_on, f_cut_off, s_downsample_data, s_upsample_data, s_cross_product, f_unit_vector, s_prng, modmul
+        & f_cut_on, f_cut_off, s_downsample_data, s_upsample_data, s_cross_product, f_unit_vector, s_prng, modmul, &
+        & s_prng_splitmix32, f_local_rank_owns_location
 
 contains
 
@@ -338,6 +340,35 @@ contains
         val = nint(y*modulus)
 
     end function modmul
+
+    !> Uniform draw in [0, 1) (1 only via single-precision rounding) from a 32-bit SplitMix-style generator (Weyl sequence hashed by
+    !! the MurmurHash3 finalizer). Exact integer arithmetic, so the stream is compiler-independent; period 2^32, and different seeds
+    !! give unrelated streams.
+    subroutine s_prng_splitmix32(var, state)
+
+        integer, parameter                      :: int64_kind = selected_int_kind(18)
+        real(wp), intent(out)                   :: var
+        integer(kind=int64_kind), intent(inout) :: state  !< reduced mod 2^32 on each draw
+        integer(kind=int64_kind)                :: z
+
+        state = iand(state + 2654435769_int64_kind, 4294967295_int64_kind)
+        z = f_mulmod32(ieor(state, ishft(state, -16)), 2246822507_int64_kind)
+        z = f_mulmod32(ieor(z, ishft(z, -13)), 3266489909_int64_kind)
+        z = ieor(z, ishft(z, -16))
+        var = real(z, wp)/4294967296._wp
+
+    end subroutine s_prng_splitmix32
+
+    !> a*b mod 2^32 for a, b in [0, 2^32), split into 16-bit halves of b so no intermediate exceeds 2^49
+    pure function f_mulmod32(a, b) result(c)
+
+        integer, parameter                   :: int64_kind = selected_int_kind(18)
+        integer(kind=int64_kind), intent(in) :: a, b
+        integer(kind=int64_kind)             :: c
+
+        c = iand(a*iand(b, 65535_int64_kind) + iand(a*ishft(b, -16), 65535_int64_kind)*65536_int64_kind, 4294967295_int64_kind)
+
+    end function f_mulmod32
 
     !> Compute the cross product c = a x b of two 3D vectors.
     subroutine s_cross_product(a, b, c)
@@ -698,5 +729,46 @@ contains
         end do
 
     end subroutine s_upsample_data
+
+    !> @brief True if `location` falls within this rank's own subdomain (a strict partition - each location is owned by exactly one
+    !! rank, unlike an overlapping multi-rank ghost-stencil neighborhood). Used by both pre_process (to decide which
+    !! generated/namelist IBs a rank writes to its own restart_data/ib_state_0.dat chunk) and simulation (to decide which IBs a rank
+    !! owns for its own periodic IB-state writes) so the two stay consistent. glb_bounds_in is the global domain extent, used only
+    !! to project a location that falls just outside the domain (floating-point edge case) onto the domain so some rank still claims
+    !! it.
+    function f_local_rank_owns_location(location, glb_bounds_in) result(owns_location)
+
+        $:GPU_ROUTINE(parallelism='[seq]')
+
+        real(wp), dimension(3), intent(in)          :: location
+        type(bounds_info), dimension(3), intent(in) :: glb_bounds_in
+        logical                                     :: owns_location
+        real(wp), dimension(3)                      :: projected_location
+
+        owns_location = .true.
+
+#ifdef MFC_MPI
+        if (num_procs > 1) then
+            projected_location(:) = location(:)
+
+            ! catch the edge case where the location lies just outside the computational domain
+            #:for X, ID, DIM in [('x', 1, 'm'), ('y', 2, 'n'), ('z', 3, 'p')]
+                if (num_dims >= ${ID}$) then
+                    if (ib_bc_${X}$%beg /= BC_PERIODIC) then
+                        ! if it is outside the domain in one direction, project it somewhere inside so at least one rank owns it
+                        if (location(${ID}$) < glb_bounds_in(${ID}$)%beg) then
+                            projected_location(${ID}$) = glb_bounds_in(${ID}$)%beg
+                        else if (glb_bounds_in(${ID}$)%end < location(${ID}$)) then
+                            projected_location(${ID}$) = glb_bounds_in(${ID}$)%end - 1.0e-10_wp
+                        end if
+                    end if
+                    owns_location = owns_location .and. ${X}$_cb(-1) <= projected_location(${ID}$) &
+                        & .and. projected_location(${ID}$) < ${X}$_cb(${DIM}$)
+                end if
+            #:endfor
+        end if
+#endif
+
+    end function f_local_rank_owns_location
 
 end module m_helper

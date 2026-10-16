@@ -15,7 +15,14 @@ from rich.panel import Panel
 
 from .. import common, sched
 from ..build import HDF5, POST_PROCESS, PRE_PROCESS, SIMULATION, build
-from ..common import MFCException, does_command_exist, format_list_to_string, get_program_output
+from ..common import MFCException, console_safe, does_command_exist, format_list_to_string, get_program_output, log_tail
+from ..gpu_diagnostics import (
+    GPU_FAULT_MARKER,
+    fault_diagnostic_env,
+    is_gpu_memory_fault,
+    rocm_debug_agent_path,
+    summarize_rocm_debug_agent,
+)
 from ..packer import packer
 from ..packer import tol as packtol
 from ..printer import cons
@@ -28,6 +35,7 @@ nPASS = 0
 nSKIP = 0
 current_test_number = 0
 total_test_count = 0
+nRESCUED = 0  # cases that failed and were recovered by a retry (#1798)
 errors = []
 failed_tests = []  # Track failed test details for summary
 test_start_time = None  # Track overall test duration
@@ -315,6 +323,56 @@ def __filter(cases_) -> typing.Tuple[typing.List[TestCase], typing.List[TestCase
     return selected_cases, skipped_cases
 
 
+def _uses_chemistry(case: TestCase) -> bool:
+    return case.params.get("chemistry", "F") == "T"
+
+
+def _drop_chemistry_cases(builders, cases, skipped_cases):
+    """--no-chemistry: skip every case that sets chemistry = T.
+
+    Keyed on the parameter, not the trace: Example cases built on reacting
+    examples need a chemistry build but carry no "Chemistry" trace element.
+    The parameter is only known after to_case(), so the builders are passed
+    alongside to keep skipped_cases a list of builders like the rest.
+    """
+    kept = [case for case in cases if not _uses_chemistry(case)]
+    return kept, skipped_cases + [builder for builder, case in zip(builders, cases) if _uses_chemistry(case)]
+
+
+def find_unbuilt(cases, codes) -> typing.List[dict]:
+    """Return one entry per (target, build slug) the cases need whose binary is not installed."""
+    unbuilt = {}
+    checked = set()
+    for case, code in itertools.product(cases, codes):
+        input_file = case.to_input_file()
+        key = (code.name, code.get_slug(input_file))
+        if key in unbuilt:
+            unbuilt[key]["cases"].append(case)
+            continue
+        if key in checked:
+            continue
+        checked.add(key)
+        binpath = code.get_install_binpath(input_file)
+        if not (os.path.isfile(binpath) and os.access(binpath, os.X_OK)):
+            unbuilt[key] = {"target": code.name, "slug": key[1], "binpath": binpath, "cases": [case]}
+    return list(unbuilt.values())
+
+
+def unbuilt_message(unbuilt: typing.List[dict]) -> str:
+    n_cases = len({case.get_uuid() for entry in unbuilt for case in entry["cases"]})
+    lines = [f"--no-build was given, but {len(unbuilt)} build(s) needed by {n_cases} test case(s) are missing:"]
+    for entry in unbuilt:
+        cases = entry["cases"]
+        more = f" (+{len(cases) - 1} more)" if len(cases) > 1 else ""
+        lines.append(f"  {entry['target']} [{entry['slug']}]: {len(cases)} case(s), e.g. {cases[0].trace} ({cases[0].get_uuid()}){more}")
+        lines.append(f"    expected {entry['binpath']}")
+    lines.append("Build them by rerunning this command with --dry-run in place of --no-build, or drop --no-build to build and test in one go.")
+    lines.append("Note that ./mfc.sh build alone does not build case-specific variants such as chemistry.")
+    if all(_uses_chemistry(case) for entry in unbuilt for case in entry["cases"]):
+        lines.append("All of the affected cases use chemistry; pass --no-chemistry to skip them.")
+    return console_safe("\n".join(lines))
+
+
 def test():
     global nFAIL, nPASS, nSKIP, total_test_count  # noqa: PLW0603
     global errors, failed_tests, test_start_time  # noqa: PLW0603
@@ -358,8 +416,10 @@ def test():
         build_coverage_map(common.MFC_ROOT_DIR, all_cases, n_jobs=int(ARG("jobs")))
         return
 
-    cases, skipped_cases = __filter(cases)
-    cases = [_.to_case() for _ in cases]
+    builders, skipped_cases = __filter(cases)
+    cases = [_.to_case() for _ in builders]
+    if ARG("no_chemistry"):
+        cases, skipped_cases = _drop_chemistry_cases(builders, cases, skipped_cases)
     total_test_count = len(cases)
 
     if ARG("list"):
@@ -379,12 +439,19 @@ def test():
     # Analytically defined patches, and --case-optimization. Here, we build all
     # the unique versions of MFC we need to run cases.
     codes = [PRE_PROCESS, SIMULATION] + ([POST_PROCESS] if ARG("test_all") else [])
-    unique_builds = set()
-    for case, code in itertools.product(cases, codes):
-        slug = code.get_slug(case.to_input_file())
-        if slug not in unique_builds:
-            build(code, case.to_input_file())
-            unique_builds.add(slug)
+    if ARG("no_build"):
+        # build() is a no-op under --no-build, so a missing binary would otherwise
+        # surface only when its cases run, one failure at a time, often at the end.
+        unbuilt = find_unbuilt(cases, codes)
+        if unbuilt:
+            raise MFCException(unbuilt_message(unbuilt))
+    else:
+        unique_builds = set()
+        for case, code in itertools.product(cases, codes):
+            slug = code.get_slug(case.to_input_file())
+            if slug not in unique_builds:
+                build(code, case.to_input_file())
+                unique_builds.add(slug)
 
     cons.print()
 
@@ -434,7 +501,7 @@ def test():
     seconds = total_duration % 60
 
     # Build the summary report
-    _print_test_summary(nPASS, nFAIL, nSKIP, minutes, seconds, failed_tests, skipped_cases)
+    _print_test_summary(nPASS, nFAIL, nSKIP, minutes, seconds, failed_tests, skipped_cases, nRESCUED)
 
     # Write failed UUIDs to file for CI retry logic
     if failed_tests:
@@ -447,7 +514,7 @@ def test():
     sys.exit(nFAIL)
 
 
-def _print_test_summary(passed: int, failed: int, skipped: int, minutes: int, seconds: float, failed_test_list: list, _skipped_cases: list):
+def _print_test_summary(passed: int, failed: int, skipped: int, minutes: int, seconds: float, failed_test_list: list, _skipped_cases: list, rescued: int = 0):
     """Print a comprehensive test summary report."""
     total = passed + failed + skipped
 
@@ -474,6 +541,12 @@ def _print_test_summary(passed: int, failed: int, skipped: int, minutes: int, se
         f"  [bold green]{passed:4d}[/bold green] passed",
         f"  [bold red]{failed:4d}[/bold red] failed",
         f"  [bold yellow]{skipped:4d}[/bold yellow] skipped",
+    ]
+    if rescued:
+        # How often a retry actually earned its cost. See #1798: without this the
+        # only measurable retry outcomes were the ones that failed anyway.
+        summary_lines.append(f"  [yellow]{rescued:4d}[/yellow] recovered by a retry")
+    summary_lines += [
         f"  [dim]{'─' * 12}[/dim]",
         f"  [bold]{total:4d}[/bold] total",
         "",
@@ -519,10 +592,35 @@ def _process_silo_file(silo_filepath: str, case: TestCase, out_filepath: str):
             raise MFCException("h5dump couldn't be found.")
         h5dump = shutil.which("h5dump")
 
-    output, err = get_program_output([h5dump, silo_filepath])
+    # merge_stderr: h5dump reports the actual reason on stderr, so capturing
+    # only stdout would leave the failure path with nothing to show.
+    output, err = get_program_output([h5dump, silo_filepath], merge_stderr=True)
 
     if err != 0:
-        raise MFCException(f"Test {case}: Failed to run h5dump. You can find the run's output in {out_filepath}, and the case dictionary in {case.get_filepath()}.")
+        # h5dump's own message and the post_process log are the only evidence of
+        # why the file could not be read, and both were being discarded: the
+        # failure reached CI as a bare path to a file on a machine nobody can
+        # reach. Whether the silo file is absent or merely unreadable is the
+        # first thing worth knowing.
+        # Never let describing the file replace the failure being reported: a
+        # broken symlink or an unreadable mount would raise OSError here and
+        # swallow the h5dump diagnostic entirely.
+        try:
+            exists = f"{os.path.getsize(silo_filepath)} bytes" if os.path.exists(silo_filepath) else "missing"
+        except OSError as size_exc:
+            exists = f"size unknown: {size_exc}"
+        # console_safe over the whole message: main.py renders this with Rich
+        # markup enabled, and the h5dump output and post_process log are full of
+        # bracketed paths. Unescaped, a MarkupError would be raised from inside
+        # the very handler meant to report this failure.
+        raise MFCException(
+            console_safe(
+                f"Test {case}: Failed to run h5dump on {silo_filepath} ({exists}).\n"
+                f"h5dump said: {output.strip() or '(no output)'}\n"
+                f"{log_tail(out_filepath)}\n"
+                f"Case dictionary: {case.get_filepath()}."
+            )
+        )
 
     if "nan," in output:
         raise MFCException(f"Test {case}: Post Process has detected a NaN. You can find the run's output in {out_filepath}, and the case dictionary in {case.get_filepath()}.")
@@ -588,7 +686,7 @@ def _handle_case(case: TestCase, devices: typing.Set[int]):
         # Check timeout before starting
         if timeout_flag.is_set():
             raise TestTimeoutError("Test case exceeded 1 hour timeout")
-        cmd = case.run([PRE_PROCESS, SIMULATION], gpus=devices)
+        cmd = case.run([PRE_PROCESS, SIMULATION], gpus=devices, env=fault_diagnostic_env(dict(os.environ)))
 
         # Check timeout after simulation
         if timeout_flag.is_set():
@@ -599,7 +697,33 @@ def _handle_case(case: TestCase, devices: typing.Set[int]):
         common.file_write(out_filepath, cmd.stdout)
 
         if cmd.returncode != 0:
-            cons.print(cmd.stdout)
+            # The debug agent emits ~14k lines per fault, nearly all of it the
+            # same disassembly and register dump repeated per wave. Print the
+            # summary when there is one; the full capture is in out_pre_sim.txt.
+            agent_summary = summarize_rocm_debug_agent(cmd.stdout)
+            if agent_summary:
+                cons.print(console_safe(agent_summary))
+                cons.print(f"    full offload report: {out_filepath}")
+            else:
+                cons.print(cmd.stdout)
+                # Falling back is silent by nature: the raw output is printed
+                # and nothing says the summary was expected. That is exactly how
+                # a ROCm 6.3.1-only parser sat on the AFAR lane returning
+                # nothing for 65,210 lines of real 7.2.0 output. If the agent is
+                # reachable and this is a GPU fault, a missing summary means the
+                # agent did not load or its format moved again -- say so.
+                if is_gpu_memory_fault(cmd.stdout) and rocm_debug_agent_path() is not None:
+                    cons.print(
+                        "    [yellow]warning[/yellow]: the ROCm debug agent is available and this is a GPU "
+                        "memory fault, but no agent report was recognised -- the agent did not load, the run "
+                        "was killed before it finished writing (a report is tens of thousands of lines), or "
+                        "its output format has changed and summarize_rocm_debug_agent needs updating."
+                    )
+            # Marked so classify_error buckets it as a GPU memory fault rather
+            # than a generic execution failure; the diagnostics that make it
+            # actionable are already in the output above.
+            if is_gpu_memory_fault(cmd.stdout):
+                raise MFCException(f"Test {case}: Failed to execute MFC {GPU_FAULT_MARKER}.")
             raise MFCException(f"Test {case}: Failed to execute MFC.")
 
         _assert_particle_cloud_ib_state(case)
@@ -644,7 +768,7 @@ def _handle_case(case: TestCase, devices: typing.Set[int]):
             if timeout_flag.is_set():
                 raise TestTimeoutError("Test case exceeded 1 hour timeout")
 
-            restart_result = case.run_restart([PRE_PROCESS, SIMULATION], devices)
+            restart_result = case.run_restart([PRE_PROCESS, SIMULATION], devices, env=fault_diagnostic_env(dict(os.environ)))
 
             if timeout_flag.is_set():
                 raise TestTimeoutError("Test case exceeded 1 hour timeout")
@@ -704,8 +828,53 @@ def _handle_case(case: TestCase, devices: typing.Set[int]):
         timeout_timer.cancel()  # Cancel timeout timer
 
 
+def classify_error(exc: Exception) -> str:
+    """Bucket a test failure into the categories the retry policy turns on.
+
+    Whether a retry is worth its cost depends on the class: a tolerance mismatch
+    re-runs the same binary over the same input and can only reach the same
+    comparison, whereas an execution failure may be a transient launcher or node
+    problem. Counting rescues without the class cannot tell those apart, which
+    is what #1798 needs to distinguish.
+    """
+    text = str(exc).lower()
+
+    if "tolerance" in text or "golden" in text or "mismatch" in text:
+        return "tolerance mismatch"
+    if "timeout" in text:
+        return "timeout"
+    if "nan" in text:
+        return "NaN detected"
+    # Before the generic branch: a GPU fault's message also contains "failed to
+    # execute", and it is the one execution failure a retry provably cannot fix.
+    if is_gpu_memory_fault(text):
+        return "GPU memory fault"
+    if "failed to execute" in text:
+        return "execution failed"
+
+    return ""
+
+
+def should_retry(attempt: int, max_attempts: int, aborting: bool) -> bool:
+    """Whether a failed case gets another attempt.
+
+    Retries here are expensive and, as far as can be measured, rarely help:
+    bench.py's equivalent rescued 0 of 235 retried cases, and every recorded
+    failed test in a two-week sample shows the full attempt count. See #1798.
+
+    `aborting` is the part that was missing. The suite-wide abort fires when the
+    failure rate says the environment itself is broken -- a dead GPU, a bad node
+    -- and in that state every remaining attempt is guaranteed to fail. Retrying
+    through an abort turns the fail-fast into a slow one.
+    """
+    if aborting:
+        return False
+
+    return attempt < max_attempts
+
+
 def handle_case(case: TestCase, devices: typing.Set[int]):
-    global nFAIL, nPASS, nSKIP  # noqa: PLW0603
+    global nFAIL, nPASS, nSKIP, nRESCUED  # noqa: PLW0603
     global errors, failed_tests  # noqa: PLW0603
 
     # Check if we should abort before processing this case
@@ -713,6 +882,7 @@ def handle_case(case: TestCase, devices: typing.Set[int]):
         return  # Exit gracefully if abort was requested
 
     nAttempts = 0
+    last_error = None
     if ARG("single"):
         max_attempts = max(ARG("max_attempts"), 3)
     else:
@@ -727,8 +897,19 @@ def handle_case(case: TestCase, devices: typing.Set[int]):
                 nSKIP += 1
             else:
                 nPASS += 1
+                if nAttempts > 1:
+                    # A rescue: the case failed and a retry recovered it. Nothing
+                    # recorded this before, so a pass on attempt 3 was
+                    # indistinguishable from a pass on attempt 1 -- which is why
+                    # the value of retrying could never be measured. See #1798.
+                    # The class matters as much as the count: retrying is worth
+                    # very different things for a tolerance mismatch than for an
+                    # execution failure.
+                    nRESCUED += 1
+                    cons.print(f"    [yellow]recovered on attempt {nAttempts}[/yellow] ({classify_error(last_error) or 'unclassified'}): {case.trace}")
         except Exception as exc:
-            if nAttempts < max_attempts:
+            last_error = exc
+            if should_retry(nAttempts, max_attempts, abort_tests.is_set()):
                 continue
             nFAIL += 1
 
@@ -754,16 +935,7 @@ def handle_case(case: TestCase, devices: typing.Set[int]):
             cons.print()
 
             # Track failed test details for summary
-            error_type = ""
-            exc_lower = str(exc).lower()
-            if "tolerance" in exc_lower or "golden" in exc_lower or "mismatch" in exc_lower:
-                error_type = "tolerance mismatch"
-            elif "timeout" in exc_lower:
-                error_type = "timeout"
-            elif "nan" in exc_lower:
-                error_type = "NaN detected"
-            elif "failed to execute" in exc_lower:
-                error_type = "execution failed"
+            error_type = classify_error(exc)
 
             failed_tests.append({"trace": case.trace, "uuid": case.get_uuid(), "error_type": error_type, "attempts": nAttempts})
 

@@ -8,6 +8,13 @@
 #:set USING_CCE = (MFC_COMPILER == CCE_COMPILER_ID)
 #:set USING_AMD = (MFC_COMPILER == AMD_COMPILER_ID)
 
+#! NUM_SPECIES (m_thermochem's species count) and CHEMISTRY, written per build by the toolchain.
+#:include 'thermochem.fpp'
+
+#! Fallback extent the USING_AMD guards substitute for sys_size arrays when case optimization is off.
+#! Chemistry pins num_fluids to 1, leaving at most 10 flow variables beside the species.
+#:set AMD_SYS_SIZE_MAX = 10 + NUM_SPECIES if CHEMISTRY else 70
+
 #:def ASSERT_LIST(data, datatype)
     #:assert data is not None
     #:assert isinstance(data, list)

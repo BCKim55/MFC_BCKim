@@ -12,6 +12,7 @@ module m_bubbles_EL
     use m_bubbles_EL_kernels
     use m_bubbles
     use m_variables_conversion
+    use m_eos
     use m_compile_specific
     use m_boundary_common
     use m_helper_basic
@@ -185,18 +186,19 @@ contains
 
         if (lag_params%vel_model > 0 .and. lag_params%pressure_force) then
             @:ALLOCATE(grad_p_x(0:m, 0:n, 0:p))
-            @:ALLOCATE(fd_coeff_x_pgrad(-fd_number:fd_number, 0:m))
+            ! s_compute_finite_difference_coefficients always extends fd_number beyond the interior on each side
+            @:ALLOCATE(fd_coeff_x_pgrad(-fd_number:fd_number,-fd_number:m + fd_number))
             call s_compute_finite_difference_coefficients(m, x_cc, fd_coeff_x_pgrad, buff_size, fd_number, fd_order)
             $:GPU_UPDATE(device='[fd_coeff_x_pgrad]')
             if (n > 0) then
                 @:ALLOCATE(grad_p_y(0:m, 0:n, 0:p))
-                @:ALLOCATE(fd_coeff_y_pgrad(-fd_number:fd_number, 0:n))
+                @:ALLOCATE(fd_coeff_y_pgrad(-fd_number:fd_number,-fd_number:n + fd_number))
                 call s_compute_finite_difference_coefficients(n, y_cc, fd_coeff_y_pgrad, buff_size, fd_number, fd_order)
                 $:GPU_UPDATE(device='[fd_coeff_y_pgrad]')
             end if
             if (p > 0) then
                 @:ALLOCATE(grad_p_z(0:m, 0:n, 0:p))
-                @:ALLOCATE(fd_coeff_z_pgrad(-fd_number:fd_number, 0:p))
+                @:ALLOCATE(fd_coeff_z_pgrad(-fd_number:fd_number,-fd_number:p + fd_number))
                 call s_compute_finite_difference_coefficients(p, z_cc, fd_coeff_z_pgrad, buff_size, fd_number, fd_order)
                 $:GPU_UPDATE(device='[fd_coeff_z_pgrad]')
             end if
@@ -371,9 +373,7 @@ contains
         do i = 1, num_dims
             dynP = dynP + 0.5_wp*q_cons_vf(eqn_idx%cont%end + i)%sf(cell(1), cell(2), cell(3))**2/rhol
         end do
-        ! Stiffened-gas inversion; must match s_compute_pressure in m_variables_conversion,
-        ! including the qv (heat of formation) term, which is nonzero for phase-change fluids.
-        pliq = (q_cons_vf(eqn_idx%E)%sf(cell(1), cell(2), cell(3)) - dynP - pi_inf - qv)/gamma
+        pliq = f_pressure(q_cons_vf(eqn_idx%E)%sf(cell(1), cell(2), cell(3)) - dynP, gamma, pi_inf, qv)
         if (pliq < 0) print *, "Negative pressure", proc_rank, q_cons_vf(eqn_idx%E)%sf(cell(1), cell(2), cell(3)), pi_inf, gamma, &
             & pliq, cell, dynP
 
@@ -452,6 +452,7 @@ contains
 
         if (proc_rank == 0) then
             call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             call MPI_FILE_READ(ifile, file_tot_part, 1, MPI_INTEGER, status, ierr)
             call MPI_FILE_READ(ifile, file_time, 1, mpi_p, status, ierr)
@@ -470,6 +471,7 @@ contains
 
         if (proc_rank == 0) then
             call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Skip to processor counts position
             disp = int(sizeof(file_tot_part) + 2*sizeof(file_time) + sizeof(file_num_procs), MPI_OFFSET_KIND)
@@ -506,6 +508,7 @@ contains
             call MPI_TYPE_COMMIT(view, ierr)
 
             call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Skip extended header
             disp = int(sizeof(file_tot_part) + 2*sizeof(file_time) + sizeof(file_num_procs) &
@@ -547,6 +550,7 @@ contains
             call MPI_TYPE_COMMIT(view, ierr)
 
             call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, MPI_MODE_RDONLY, mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Skip extended header
             disp = int(sizeof(file_tot_part) + 2*sizeof(file_time) + sizeof(file_num_procs) &
@@ -659,7 +663,7 @@ contains
             ! Obtain liquid density and computing speed of sound from pinf
             call s_compute_species_fraction(q_prim_vf, cell(1), cell(2), cell(3), myalpha_rho, myalpha)
             call s_convert_species_to_mixture_variables_kernel(myRho, gamma, pi_inf, qv, myalpha, myalpha_rho, Re)
-            call s_compute_cson_from_pinf(q_prim_vf, myPinf, cell, myRho, gamma, pi_inf, myCson)
+            myCson = sqrt(f_bulk_modulus(myPinf, gamma, pi_inf)/myRho)
 
             ! Adaptive time stepping
             adap_dt_stop = 0
@@ -815,34 +819,6 @@ contains
         call nvtxEndRange
 
     end subroutine s_compute_bubbles_EL_source
-
-    !> Compute the speed of sound from a given driving pressure
-    subroutine s_compute_cson_from_pinf(q_prim_vf, pinf, cell, rhol, gamma, pi_inf, cson)
-
-        $:GPU_ROUTINE(function_name='s_compute_cson_from_pinf', parallelism='[seq]', cray_inline=True)
-
-        type(scalar_field), dimension(sys_size), intent(in) :: q_prim_vf
-        real(wp), intent(in)                                :: pinf, rhol, gamma, pi_inf
-        integer, dimension(3), intent(in)                   :: cell
-        real(wp), intent(out)                               :: cson
-        real(wp)                                            :: E, H
-        #:if not MFC_CASE_OPTIMIZATION and USING_AMD
-            real(wp), dimension(3) :: vel
-        #:else
-            real(wp), dimension(num_dims) :: vel
-        #:endif
-        integer :: i
-
-        vel(:) = 0._wp
-        $:GPU_LOOP(parallelism='[seq]')
-        do i = 1, num_dims
-            vel(i) = q_prim_vf(i + eqn_idx%cont%end)%sf(cell(1), cell(2), cell(3))
-        end do
-        E = gamma*pinf + pi_inf + 0.5_wp*rhol*dot_product(vel, vel)
-        H = (E + pinf)/rhol
-        cson = sqrt((H - 0.5_wp*dot_product(vel, vel))/gamma)
-
-    end subroutine s_compute_cson_from_pinf
 
     !> Smear the bubble effects onto the Eulerian grid
     subroutine s_smear_voidfraction(bc_type)
@@ -1361,9 +1337,7 @@ contains
                      & 2) <= pcomm_coords(1)%end) then
                 wrap_bubble_dir(k, 1) = 1
                 wrap_bubble_loc(k, 1) = 1
-            else if (mtn_pos(k, 1, 2) >= x_cb(m)) then
-                keep_bubble(k) = 0
-            else if (mtn_pos(k, 1, 2) < x_cb(-1)) then
+            else if (.not. (mtn_pos(k, 1, 2) >= x_cb(-1) .and. mtn_pos(k, 1, 2) < x_cb(m))) then
                 keep_bubble(k) = 0
             end if
 
@@ -1381,9 +1355,7 @@ contains
                      & 2) <= pcomm_coords(2)%end) then
                 wrap_bubble_dir(k, 2) = 1
                 wrap_bubble_loc(k, 2) = 1
-            else if (mtn_pos(k, 2, 2) >= y_cb(n)) then
-                keep_bubble(k) = 0
-            else if (mtn_pos(k, 2, 2) < y_cb(-1)) then
+            else if (.not. (mtn_pos(k, 2, 2) >= y_cb(-1) .and. mtn_pos(k, 2, 2) < y_cb(n))) then
                 keep_bubble(k) = 0
             end if
 
@@ -1402,9 +1374,7 @@ contains
                          & 2) <= pcomm_coords(3)%end) then
                     wrap_bubble_dir(k, 3) = 1
                     wrap_bubble_loc(k, 3) = 1
-                else if (mtn_pos(k, 3, 2) >= z_cb(p)) then
-                    keep_bubble(k) = 0
-                else if (mtn_pos(k, 3, 2) < z_cb(-1)) then
+                else if (.not. (mtn_pos(k, 3, 2) >= z_cb(-1) .and. mtn_pos(k, 3, 2) < z_cb(p))) then
                     keep_bubble(k) = 0
                 end if
             end if
@@ -1764,9 +1734,6 @@ contains
             call my_inquire(trim(file_loc), file_exist)
             if (.not. file_exist) then
                 open (LAG_VOID_ID, FILE=trim(file_loc), form='formatted', position='rewind')
-                ! write (12, *) 'currentTime, averageVoidFraction, ', & 'maximumVoidFraction, totalParticlesVolume' write (12, *)
-                ! 'The averageVoidFraction value does ', & 'not reflect the real void fraction in the cloud since the ', & 'cells
-                ! which do not have bubbles are not accounted'
             else
                 open (LAG_VOID_ID, FILE=trim(file_loc), form='formatted', position='append')
             end if
@@ -1896,6 +1863,7 @@ contains
 
         if (proc_rank == 0) then
             call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Write header using MPI I/O for consistency
             call MPI_FILE_WRITE(ifile, tot_part, 1, MPI_INTEGER, status, ierr)
@@ -1937,6 +1905,7 @@ contains
             call MPI_TYPE_COMMIT(view, ierr)
 
             call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Skip header (written by rank 0)
             disp = int(sizeof(tot_part) + 2*sizeof(mytime) + sizeof(num_procs) + num_procs*sizeof(proc_bubble_counts(1)), &
@@ -1953,6 +1922,7 @@ contains
             call MPI_TYPE_COMMIT(view, ierr)
 
             call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+            call s_check_mpi_file_open(ierr, file_loc)
 
             ! Skip header (written by rank 0)
             disp = int(sizeof(tot_part) + 2*sizeof(mytime) + sizeof(num_procs) + num_procs*sizeof(proc_bubble_counts(1)), &

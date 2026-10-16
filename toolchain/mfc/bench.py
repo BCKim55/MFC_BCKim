@@ -11,7 +11,8 @@ import uuid
 import rich.table
 
 from .build import DEFAULT_TARGETS, SIMULATION, get_targets
-from .common import MFC_BENCH_FILEPATH, MFC_BUILD_DIR, MFCException, create_directory, file_dump_yaml, file_load_yaml, format_list_to_string, system
+from .common import MFC_BENCH_FILEPATH, MFC_BUILD_DIR, MFCException, console_safe, create_directory, file_dump_yaml, file_load_yaml, format_list_to_string, log_tail, system
+from .gpu_diagnostics import fault_diagnostic_env, summarize_rocm_debug_agent
 from .printer import cons
 from .state import ARG, CFG
 
@@ -21,6 +22,25 @@ class BenchCase:
     slug: str
     path: str
     args: typing.List[str]
+
+
+def bench_failure_report(log_filepath: str) -> str:
+    """What to show for a failed benchmark case.
+
+    A GPU memory fault under the ROCm debug agent runs to tens of thousands of
+    lines, nearly all of it one disassembly and register dump repeated per wave.
+    A fixed tail is not merely long here, it is wrong: measured on a real
+    report, the last 80 lines are a single wave's registers and the kernel name
+    -- the only part worth having -- is not among them. Fall back to the tail
+    only when there is no agent report to summarize.
+    """
+    try:
+        with open(log_filepath, "r", encoding="utf-8", errors="replace") as log_file:
+            summary = summarize_rocm_debug_agent(log_file.read())
+    except OSError:
+        return log_tail(log_filepath)
+
+    return summary or log_tail(log_filepath)
 
 
 def bench(targets=None):
@@ -76,6 +96,10 @@ def bench(targets=None):
                                 ["./mfc.sh", "run", case.path] + ["--targets"] + [t.name for t in targets] + ["--output-summary", summary_filepath] + case.args + ["--", "--gbpp", str(ARG("mem"))],
                                 stdout=log_file,
                                 stderr=subprocess.STDOUT,
+                                # Same offload diagnostics the test harness uses:
+                                # these cases run on GPUs too, and a fault here
+                                # was previously reported as a bare address.
+                                env=fault_diagnostic_env(dict(os.environ)),
                             )
 
                         # Check return code (handle CompletedProcess or int defensively)
@@ -87,7 +111,9 @@ def bench(targets=None):
                                 time.sleep(5)
                                 continue
                             cons.print(f"[bold red]ERROR[/bold red]: Case {case.slug} failed with exit code {rc}")
-                            cons.print(f"[bold red]      Check log at: {log_filepath}[/bold red]")
+                            # Print the log, not just its path: this file lives
+                            # on the cluster and no artifact upload collects it.
+                            cons.print(console_safe(bench_failure_report(log_filepath)))
                             failed_cases.append(case.slug)
                             break
 
@@ -99,6 +125,7 @@ def bench(targets=None):
                                 time.sleep(5)
                                 continue
                             cons.print(f"[bold red]ERROR[/bold red]: Summary file not created for {case.slug}")
+                            cons.print(console_safe(bench_failure_report(log_filepath)))
                             cons.print(f"[bold red]      Expected: {summary_filepath}[/bold red]")
                             failed_cases.append(case.slug)
                             break
@@ -166,6 +193,45 @@ def bench(targets=None):
         cons.unindent()
 
 
+def _write_step_summary(lhs_path: str, rhs_path: str, rows: typing.List[typing.Tuple[str, str, str, str]], warnings: typing.List[str]):
+    """Put the speedup table on the workflow run's summary page.
+
+    The same numbers already go to stdout, but reading them there means expanding the
+    right step of the right matrix leg. GitHub renders $GITHUB_STEP_SUMMARY inline on
+    the job, so the table is visible without opening anything. Does nothing outside
+    Actions, where the variable is unset.
+    """
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or not rows:
+        return
+
+    # The matrix leg is not otherwise on the page, and every leg writes its own summary.
+    leg = os.environ.get("MFC_BENCH_SUMMARY_LABEL", "")
+    heading = f"### Benchmark: {leg}" if leg else "### Benchmark"
+
+    lines = [
+        heading,
+        "",
+        f"Speedups from `{lhs_path}` to `{rhs_path}`; greater than 1 is faster.",
+        "",
+        "| Case | Pre Process | Simulation | Post Process |",
+        "| --- | --- | --- | --- |",
+    ]
+    lines += [f"| `{slug}` | {pre} | {sim} | {post} |" for slug, pre, sim, post in rows]
+    if warnings:
+        lines += ["", "**Below threshold**", ""] + [f"- {w}" for w in warnings]
+    lines.append("")
+
+    # The summary is a convenience on top of output that already went to stdout, so a filesystem
+    # problem here must not fail a benchmark that otherwise succeeded. Narrow to OSError: anything
+    # else is a bug in the lines above and should surface.
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except OSError as exc:
+        cons.print(f"[bold yellow]Warning[/bold yellow]: could not write the benchmark step summary: {exc}")
+
+
 def diff():
     lhs, rhs = file_load_yaml(ARG("lhs")), file_load_yaml(ARG("rhs"))
     lhs_path = os.path.relpath(ARG("lhs"))
@@ -206,6 +272,8 @@ def diff():
     table.add_column("[bold]Post Process[/bold]", justify="right")
 
     err = 0
+    summary_rows = []
+    warnings = []
     for slug in slugs:
         lhs_summary, rhs_summary = lhs["cases"][slug]["output_summary"], rhs["cases"][slug]["output_summary"]
         speedups = ["N/A", "N/A", "N/A"]
@@ -223,6 +291,7 @@ def diff():
                 exec_time_value = lhs_summary[target.name]["exec"] / rhs_summary[target.name]["exec"]
                 if exec_time_value < 0.9:
                     cons.print(f"[bold yellow]Warning[/bold yellow]: Exec time speedup for {target.name} is less than 0.9 - Case: {slug}")
+                    warnings.append(f"exec speedup {exec_time_value:.2f} < 0.90 for {target.name} in `{slug}`")
                 speedups[i] = f"Exec: {exec_time_value:.2f}"
                 if target == SIMULATION:
                     if not math.isfinite(lhs_summary[target.name]["grind"]) or not math.isfinite(rhs_summary[target.name]["grind"]):
@@ -233,12 +302,15 @@ def diff():
                     speedups[i] += f" & Grind: {grind_time_value:.2f}"
                     if grind_time_value < 0.95:
                         cons.print(f"[bold yellow]Warning[/bold yellow]: Grind time speedup for {target.name} below threshold (<0.95) - Case: {slug}")
+                        warnings.append(f"grind speedup {grind_time_value:.2f} < 0.95 for {target.name} in `{slug}`")
             except Exception as e:
                 cons.print(f"[bold red]ERROR[/bold red]: Failed to compute speedup for {target.name} in {slug}: {e}\n{traceback.format_exc()}")
                 err = 1
 
         table.add_row(f"[magenta]{slug}[/magenta]", *speedups)
+        summary_rows.append((slug, *speedups))
 
     cons.raw.print(table)
+    _write_step_summary(lhs_path, rhs_path, summary_rows, warnings)
     if err:
         raise MFCException("Benchmarking failed")

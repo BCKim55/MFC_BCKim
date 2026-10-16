@@ -10,8 +10,6 @@ module m_weno
     use m_derived_types
     use m_global_parameters
     use m_variables_conversion
-    ! $:USE_GPU_MODULE()
-
     use m_mpi_proxy
     use m_thinc, only: s_thinc_compression
     use m_nvtx
@@ -392,18 +390,7 @@ contains
                                            & i + 1) = ((w(1) - w(5))*(w(2) - w(5))*(w(3) - w(5)))/((w(1) - w(8))*(w(2) - w(8)) &
                                            & *(w(3) - w(8)))
 
-                            ! Element-wise on purpose - do NOT rewrite as a reversed-stride section (e.g. s_cb(i+1:i-2:-1)):
-                            ! negative-stride sections of descriptor arrays lower to address arithmetic whose no-wrap
-                            ! (nuw) claims are false, which amdflang (AFAR drop-23.2.x, flang PR #184573; fixed upstream
-                            ! in #198014) turns into silently wrong WENO7 coefficients at -O2/-O3.
-                            w(1) = s_cb(i + 4) - s_cb(i)
-                            w(2) = s_cb(i + 3) - s_cb(i)
-                            w(3) = s_cb(i + 2) - s_cb(i)
-                            w(4) = s_cb(i + 1) - s_cb(i)
-                            w(5) = s_cb(i) - s_cb(i)
-                            w(6) = s_cb(i - 1) - s_cb(i)
-                            w(7) = s_cb(i - 2) - s_cb(i)
-                            w(8) = s_cb(i - 3) - s_cb(i)
+                            w = s_cb(i + 4:i - 3:-1) - s_cb(i)
                             d_cbL_${XYZ}$ (0, &
                                            & i + 1) = ((w(1) - w(5))*(w(2) - w(5))*(w(3) - w(5)))/((w(1) - w(8))*(w(2) - w(8)) &
                                            & *(w(3) - w(8)))
@@ -473,11 +460,7 @@ contains
                                                    & 2) = (y(4)*(y(3) + y(4))*(y(2) + y(3) + y(4)))/((y(1) + y(2))*(y(1) + y(2) &
                                                    & + y(3))*(y(1) + y(2) + y(3) + y(4)))
 
-                            ! Element-wise: see the no-reversed-sections note above.
-                            y(1) = s_cb(i + 1) - s_cb(i)
-                            y(2) = s_cb(i) - s_cb(i - 1)
-                            y(3) = s_cb(i - 1) - s_cb(i - 2)
-                            y(4) = s_cb(i - 2) - s_cb(i - 3)
+                            y = s_cb(i + 1:i - 2:-1) - s_cb(i:i - 3:-1)
                             poly_coef_cbL_${XYZ}$ (i + 1, 3, &
                                                    & 2) = (y(1)*y(2)*(y(2) + y(3)))/((y(3) + y(4))*(y(2) + y(3) + y(4))*(y(1) &
                                                    & + y(2) + y(3) + y(4)))
@@ -490,11 +473,7 @@ contains
                                                    & + 4*y(2)*y(3) + 2*y(4)*y(2) + y(3)**2 + y(4)*y(3)))/((y(1) + y(2))*(y(1) &
                                                    & + y(2) + y(3))*(y(1) + y(2) + y(3) + y(4)))
 
-                            ! Element-wise: see the no-reversed-sections note above.
-                            y(1) = s_cb(i + 2) - s_cb(i + 1)
-                            y(2) = s_cb(i + 1) - s_cb(i)
-                            y(3) = s_cb(i) - s_cb(i - 1)
-                            y(4) = s_cb(i - 1) - s_cb(i - 2)
+                            y = s_cb(i + 2:i - 1:-1) - s_cb(i + 1:i - 2:-1)
                             poly_coef_cbL_${XYZ}$ (i + 1, 2, &
                                                    & 2) = -(y(2)*y(3)*(y(1) + y(2)))/((y(3) + y(4))*(y(2) + y(3) + y(4))*(y(1) &
                                                    & + y(2) + y(3) + y(4)))
@@ -506,11 +485,7 @@ contains
                                                    & 0) = (y(2)*y(3)*(y(3) + y(4)))/((y(1) + y(2))*(y(1) + y(2) + y(3))*(y(1) &
                                                    & + y(2) + y(3) + y(4)))
 
-                            ! Element-wise: see the no-reversed-sections note above.
-                            y(1) = s_cb(i + 3) - s_cb(i + 2)
-                            y(2) = s_cb(i + 2) - s_cb(i + 1)
-                            y(3) = s_cb(i + 1) - s_cb(i)
-                            y(4) = s_cb(i) - s_cb(i - 1)
+                            y = s_cb(i + 3:i:-1) - s_cb(i + 2:i - 1:-1)
                             poly_coef_cbL_${XYZ}$ (i + 1, 1, &
                                                    & 2) = (y(3)*(y(2) + y(3))*(y(1) + y(2) + y(3)))/((y(3) + y(4))*(y(2) + y(3) &
                                                    & + y(4))*(y(1) + y(2) + y(3) + y(4)))
@@ -522,11 +497,7 @@ contains
                                                    & 0) = -(y(3)*y(4)*(y(2) + y(3)))/((y(1) + y(2))*(y(1) + y(2) + y(3))*(y(1) &
                                                    & + y(2) + y(3) + y(4)))
 
-                            ! Element-wise: see the no-reversed-sections note above.
-                            y(1) = s_cb(i + 4) - s_cb(i + 3)
-                            y(2) = s_cb(i + 3) - s_cb(i + 2)
-                            y(3) = s_cb(i + 2) - s_cb(i + 1)
-                            y(4) = s_cb(i + 1) - s_cb(i)
+                            y = s_cb(i + 4:i + 1:-1) - s_cb(i + 3:i:-1)
                             poly_coef_cbL_${XYZ}$ (i + 1, 0, &
                                                    & 2) = (y(4)*(y(2)**2 + 4*y(2)*y(3) + 4*y(2)*y(4) + y(1)*y(2) + 3*y(3)**2 &
                                                    & + 6*y(3)*y(4) + 2*y(1)*y(3) + 3*y(4)**2 + 2*y(1)*y(4)))/((y(3) + y(4))*(y(2) &

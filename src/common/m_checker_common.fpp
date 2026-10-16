@@ -54,7 +54,9 @@ contains
         #:if not MFC_CASE_OPTIMIZATION
             @:PROHIBIT(num_fluids > 3, "num_fluids <= 3 for AMDFLang when Case optimization is off")
             @:PROHIBIT((bubbles_euler .or. bubbles_lagrange) .and. nb > 3, "nb <= 3 for AMDFLang when Case optimization is off")
-            @:PROHIBIT(chemistry .and. num_species > 10, "num_species > 10 for AMDFLang when Case optimization is off")
+            ! HLLC's star states and the CBC L vectors have no other bound.
+            @:PROHIBIT(sys_size > ${AMD_SYS_SIZE_MAX}$, &
+                       & "sys_size <= ${AMD_SYS_SIZE_MAX}$ for AMDFLang when Case optimization is off")
         #:endif
 
     end subroutine s_check_amd
