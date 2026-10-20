@@ -372,7 +372,6 @@ module m_derived_types
         integer :: moving_ibm  !< 0 for no moving, 1 for moving, 2 for moving on forced path
         real(wp) :: v_blow  !< Wall-normal surface blowing speed (burning/transpiring IB surface); 0 = impermeable
         integer :: inj_species  !< Injected species index at a blowing surface (chemistry); 0 = mirror ambient
-        real(wp) :: Twall  !< Isothermal surface temperature (needs chemistry conduction); <= 0 = adiabatic
         real(wp) :: burn_rate_exp  !< Pressure exponent n in v_blow*(p/p_ref)^n (Vieille's law); 0 = constant blowing
         real(wp) :: burn_rate_pref  !< Reference pressure p_ref for the pressure-coupled burn rate; 0 = coupling off
         real(wp) :: mass, moment  !< mass and moment of inertia of object used to compute forces in 2-way coupling
@@ -406,7 +405,7 @@ module m_derived_types
         integer  :: shell_axis  !< Axis the hemisphere shell opens toward: 1=x, 2=y, 3=z (2D ignores 3)
         integer  :: packing_method  !< Packing algorithm: 1=rejection sampling, 2=lattice
         integer  :: periodic  !< Periodic overlap flag for box rejection packing: 0=off, 1=on
-        real(wp) :: Twall  !< Isothermal surface temperature of every particle; <= 0 = adiabatic
+        real(wp) :: Twall  !< Isothermal surface temperature of every particle (thermal_bc = 1); <= 0 = adiabatic
     end type particle_cloud_parameters
 
     !> Derived type annexing the physical parameters (PP) of the fluids. These include the specific heat ratio function and liquid

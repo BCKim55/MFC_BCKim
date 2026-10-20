@@ -838,8 +838,6 @@ def _load():
         _r(f"p_{d}", REAL, math=r"\f$\phi_" + d + r"\f$")
         _r(f"bf_{d}", LOG)
     _r("const_mean_T", LOG)
-    _r("conduction", LOG)
-    _r("Pr", REAL, math=r"\f$\mathrm{Pr}\f$")
     _r("mu_T_exp", REAL, math=r"\f$n_\mu\f$")
     _r("mu_T_ref", REAL, math=r"\f$T_{\mu}\f$")
     _r("const_mean_rho", LOG)
@@ -1426,8 +1424,6 @@ _nv(
     "bf_y",
     "bf_z",
     "const_mean_T",
-    "conduction",
-    "Pr",
     "mu_T_exp",
     "mu_T_ref",
     "const_mean_rho",

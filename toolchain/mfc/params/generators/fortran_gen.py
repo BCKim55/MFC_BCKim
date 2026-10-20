@@ -34,10 +34,8 @@ _VALID_TARGETS = ("pre", "sim", "post")
 # other names are emitted by generated_decls.fpp.
 SIM_GPU_DECL_VARS = {
     "ADC_kappa",
-    "Pr",
     "mu_T_exp",
     "mu_T_ref",
-    "conduction",
     "Bx0",
     "Ca",
     "R0ref",

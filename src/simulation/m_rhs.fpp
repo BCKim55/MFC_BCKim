@@ -647,12 +647,6 @@ contains
 
             call nvtxStartRange("RHS-COMMUNICATION")
             call s_populate_variables_buffers(bc_type, q_prim_qp%vf, pb_in, mv_in, q_T_sf)
-
-            ! Isothermal IB surfaces: overwrite the ghost-point temperature seen by
-            ! the chemistry conduction flux (conservative ghost state untouched)
-            if (ib .and. chemistry) then
-                if (chem_params%diffusion) call s_ibm_set_isothermal_T(q_T_sf)
-            end if
             call nvtxEndRange
         end if
 
@@ -822,12 +816,6 @@ contains
             end if
         end if
         ! END: Dimensional Splitting Loop
-        if (conduction .and. .not. igr) then
-            call nvtxStartRange("RHS-CONDUCTION")
-            call s_compute_heat_conduction(q_prim_qp%vf, ib_markers, rhs_vf)
-            if (ib) call s_ibm_wall_heat_flux(q_prim_qp%vf, rhs_vf)
-            call nvtxEndRange
-        end if
 
         ! RHS additions for hypoelasticity (interface-consistent path, after all sweeps)
         if (hypo_nc_mode == hypo_nc_mode_interface) then

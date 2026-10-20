@@ -23,8 +23,7 @@ module m_viscous
     use m_hb_function
 
     private; public s_get_viscous, s_compute_viscous_stress_cylindrical_boundary, s_initialize_viscous_module, f_mu_T, &
-        & s_reconstruct_cell_boundary_values_visc_deriv, s_finalize_viscous_module, s_compute_viscous_stress_tensor, &
-        & s_compute_heat_conduction
+        & s_reconstruct_cell_boundary_values_visc_deriv, s_finalize_viscous_module, s_compute_viscous_stress_tensor
 
     type(int_bounds_info) :: iv
     type(int_bounds_info) :: is1_viscous, is2_viscous, is3_viscous
@@ -1115,78 +1114,6 @@ contains
         end if
 
     end subroutine s_compute_fd_gradient
-
-    !> Fourier heat conduction for a single perfect gas with a constant Prandtl number. The energy flux -kappa dT/dn with kappa = mu
-    !! c_p/Pr is written as -(mu/Pr) gamma/(gamma-1) d(p/rho)/dn, so only gamma, mu and Pr are needed. Second-order central face
-    !! fluxes; a face that touches a ghost or solid cell carries no flux, i.e. immersed surfaces are adiabatic.
-    subroutine s_compute_heat_conduction(q_prim_vf, ib_markers, rhs_vf)
-
-        type(scalar_field), dimension(sys_size), intent(in)    :: q_prim_vf
-        type(integer_field), intent(in)                        :: ib_markers
-        type(scalar_field), dimension(sys_size), intent(inout) :: rhs_vf
-        real(wp)                                               :: coef, th_c, th_p, th_m, q_p, q_m, flux_div
-        integer                                                :: j, k, l
-
-        ! mu * (gamma/(gamma-1)) / Pr, with gamma/(gamma-1) = 1 + gammas
-
-        coef = fluid_inv_re(1)*(1._wp + gammas(1))/Pr
-
-        $:GPU_PARALLEL_LOOP(collapse=3, private='[j, k, l, th_c, th_p, th_m, q_p, q_m, flux_div]', copyin='[coef]')
-        do l = 0, p
-            do k = 0, n
-                do j = 0, m
-                    th_c = q_prim_vf(eqn_idx%E)%sf(j, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l)
-                    ! x faces
-                    th_p = q_prim_vf(eqn_idx%E)%sf(j + 1, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j + 1, k, l)
-                    th_m = q_prim_vf(eqn_idx%E)%sf(j - 1, k, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j - 1, k, l)
-                    q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(x_cc(j + 1) - x_cc(j))
-                    q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(x_cc(j) - x_cc(j - 1))
-                    if (ib) then
-                        if (ib_markers%sf(j, k, l) /= 0) then
-                            q_p = 0._wp; q_m = 0._wp
-                        else
-                            if (ib_markers%sf(j + 1, k, l) /= 0) q_p = 0._wp
-                            if (ib_markers%sf(j - 1, k, l) /= 0) q_m = 0._wp
-                        end if
-                    end if
-                    flux_div = (q_p - q_m)/dx(j)
-                    if (n > 0) then
-                        th_p = q_prim_vf(eqn_idx%E)%sf(j, k + 1, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k + 1, l)
-                        th_m = q_prim_vf(eqn_idx%E)%sf(j, k - 1, l)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k - 1, l)
-                        q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(y_cc(k + 1) - y_cc(k))
-                        q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(y_cc(k) - y_cc(k - 1))
-                        if (ib) then
-                            if (ib_markers%sf(j, k, l) /= 0) then
-                                q_p = 0._wp; q_m = 0._wp
-                            else
-                                if (ib_markers%sf(j, k + 1, l) /= 0) q_p = 0._wp
-                                if (ib_markers%sf(j, k - 1, l) /= 0) q_m = 0._wp
-                            end if
-                        end if
-                        flux_div = flux_div + (q_p - q_m)/dy(k)
-                    end if
-                    if (p > 0) then
-                        th_p = q_prim_vf(eqn_idx%E)%sf(j, k, l + 1)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l + 1)
-                        th_m = q_prim_vf(eqn_idx%E)%sf(j, k, l - 1)/q_prim_vf(eqn_idx%cont%beg)%sf(j, k, l - 1)
-                        q_p = coef*f_mu_T(0.5_wp*(th_p + th_c))*(th_p - th_c)/(z_cc(l + 1) - z_cc(l))
-                        q_m = coef*f_mu_T(0.5_wp*(th_c + th_m))*(th_c - th_m)/(z_cc(l) - z_cc(l - 1))
-                        if (ib) then
-                            if (ib_markers%sf(j, k, l) /= 0) then
-                                q_p = 0._wp; q_m = 0._wp
-                            else
-                                if (ib_markers%sf(j, k, l + 1) /= 0) q_p = 0._wp
-                                if (ib_markers%sf(j, k, l - 1) /= 0) q_m = 0._wp
-                            end if
-                        end if
-                        flux_div = flux_div + (q_p - q_m)/dz(l)
-                    end if
-                    rhs_vf(eqn_idx%E)%sf(j, k, l) = rhs_vf(eqn_idx%E)%sf(j, k, l) + flux_div
-                end do
-            end do
-        end do
-        $:END_GPU_PARALLEL_LOOP()
-
-    end subroutine s_compute_heat_conduction
 
     !> Compute the viscous stress tensor at a single grid cell using finite-difference velocity gradients
     subroutine s_compute_viscous_stress_tensor(viscous_stress_tensor, q_prim_vf, dynamic_viscosity, i, j, k)

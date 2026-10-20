@@ -267,11 +267,6 @@ contains
             else
                 vcfl_dt = cfl_target*(dx(j)**2._wp)/maxval(1/(rho*Re_l))
             end if
-            ! Fourier conduction: thermal diffusivity alpha = gamma*nu/Pr. The explicit 2*num_dims-point
-            ! Laplacian is stable under RK3 for alpha*dt*sum(2/dx_i^2) < 2.5, i.e. alpha*dt/dx^2 below
-            ! ~0.6/num_dims; with cfl_target 0.4 the extra 1/num_dims keeps it at 0.2 (2D) / 0.13 (3D).
-            ! Without it a conduction-limited region blows up within ~50 steps (measured, 2D, NRES 40).
-            if (conduction) vcfl_dt = vcfl_dt*min(1._wp, Pr/((1._wp + 1._wp/gammas(1))*real(num_dims, wp)))
             max_dt(2) = vcfl_dt
         end if
 

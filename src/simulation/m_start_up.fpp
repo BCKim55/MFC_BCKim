@@ -1232,14 +1232,18 @@ contains
         ib_patch%slip = .false.
         ! Particles are inert surfaces: a cloud IB carries no case-file surface condition, so the thermal,
         ! reaction and blowing fields must be set here rather than left as whatever patch_ib held.
+        ! particle_cloud%Twall > 0 makes every particle an isothermal wall (thermal_bc = 1).
         ib_patch%thermal_bc = 0
         ib_patch%Twall = 0._wp
+        if (particle_cloud(cloud_idx)%Twall > 0._wp) then
+            ib_patch%thermal_bc = 1
+            ib_patch%Twall = particle_cloud(cloud_idx)%Twall
+        end if
         ib_patch%surface_reaction = 0
         ib_patch%v_blow = 0._wp
         ib_patch%inj_species = 0
         ib_patch%burn_rate_exp = 0._wp
         ib_patch%burn_rate_pref = 0._wp
-        ib_patch%Twall = particle_cloud(cloud_idx)%Twall
         ! Selector for the prescribed-kinematics block; zero leaves the eleven kin_* reals unread.
         ib_patch%kin_model = 0
 

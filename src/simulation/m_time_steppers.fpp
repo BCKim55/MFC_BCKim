@@ -90,11 +90,10 @@ contains
         rho_target_set = .false.
         mass_flux_target_set = .false.
         ctrl_log = 0._wp
-        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T .or. (ib .and. conduction))) then
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) then
             if (n_start == 0) then
                 open (newunit=ctrl_unit, file=trim(case_dir) // '/mean_ctrl.dat', status='replace')
-                write (ctrl_unit, &
-                       & '(A)') '# t_step  time  dt  s_rho-1  mass_flux_shift  s_T-1  sum_rho_gas  sum_rhou_gas  n_gas  Q_wall'
+                write (ctrl_unit, '(A)') '# t_step  time  dt  s_rho-1  mass_flux_shift  s_T-1  sum_rho_gas  sum_rhou_gas  n_gas'
             else
                 open (newunit=ctrl_unit, file=trim(case_dir) // '/mean_ctrl.dat', status='old', position='append')
             end if
@@ -474,7 +473,7 @@ contains
         real(wp), intent(inout) :: time_avg
         integer, intent(in)     :: nstage
         integer                 :: i, j, k, l, q, s  !< Generic loop iterator
-        real(wp)                :: start, finish, q_wall
+        real(wp)                :: start, finish
         integer(kind=8)         :: stage_t0, stage_t1, clock_rate, clock_max
         real(wp)                :: stage_time
         integer, parameter      :: n_warmup = 2      !< time steps excluded before the timing floor (warmup/JIT/first-touch)
@@ -651,12 +650,8 @@ contains
         if (const_mean_rho) call s_hold_mean_density(q_cons_ts(1)%vf)
         if (const_mass_flux) call s_hold_mean_mass_flux(q_cons_ts(1)%vf)
         if (const_mean_T) call s_hold_mean_temperature(q_cons_ts(1)%vf)
-        if (const_mean_rho .or. const_mass_flux .or. const_mean_T .or. (ib .and. conduction)) then
-            q_wall = 0._wp
-            if (ib .and. conduction) call s_mpi_allreduce_sum(ib_wall_heat, q_wall)
-        end if
-        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T .or. (ib .and. conduction))) then
-            write (ctrl_unit, '(I0, 9(1X, ES16.9))') t_step, mytime, dt, ctrl_log, q_wall
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) then
+            write (ctrl_unit, '(I0, 8(1X, ES16.9))') t_step, mytime, dt, ctrl_log
             flush (ctrl_unit)
         end if
 
@@ -1272,8 +1267,7 @@ contains
         use hipfort_check
 #endif
         integer :: i, j  !< Generic loop iterators
-        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T .or. (ib .and. conduction))) &
-            & close (ctrl_unit)
+        if (proc_rank == 0 .and. (const_mean_rho .or. const_mass_flux .or. const_mean_T)) close (ctrl_unit)
         ! Deallocating the cell-average conservative variables
 #if defined(__NVCOMPILER_GPU_UNIFIED_MEM)
         do j = 1, sys_size

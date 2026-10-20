@@ -552,8 +552,6 @@ contains
         bodyForces = .false.
         bf_x = .false.; bf_y = .false.; bf_z = .false.
         const_mean_T = .false.
-        conduction = .false.
-        Pr = dflt_real
         mu_T_exp = 0._wp
         mu_T_ref = dflt_real
         const_mean_rho = .false.
@@ -711,7 +709,6 @@ contains
             patch_ib(i)%inj_species = 0
             patch_ib(i)%burn_rate_exp = 0._wp
             patch_ib(i)%burn_rate_pref = 0._wp
-            patch_ib(i)%Twall = dflt_real
 
             ! Variables to handle moving immersed boundaries, defaulting to no movement
             patch_ib(i)%moving_ibm = 0
@@ -1009,11 +1006,9 @@ contains
                      & avg_state, model_eqns, mixture_err, grid_geometry, cyl_coord, mp_weno, weno_eps, teno_CT, low_Mach, ib]')
         $:GPU_UPDATE(device='[riemann_hypo_ADC, ADC_kappa, hll_u_interface, hypo_hll_interface_rhs, hypo_nc_mode]')
 
-        ! Fourier conduction: Pr defaults to 0.7 (air) when the case does not set it
-        if (conduction .and. Pr <= 0._wp) Pr = 0.7_wp
         ! power-law viscosity mu = mu0 (T/mu_T_ref)^mu_T_exp: R T = p/rho = cv/gammas T, so T/T_ref = (p/rho) gammas/(cv mu_T_ref)
         if (mu_T_exp > 0._wp) mu_T_scale = fluid_pp(1)%gamma/(fluid_pp(1)%cv*mu_T_ref)
-        $:GPU_UPDATE(device='[conduction, Pr, mu_T_exp, mu_T_scale]')
+        $:GPU_UPDATE(device='[mu_T_exp, mu_T_scale]')
 
         $:GPU_UPDATE(device='[Bx0]')
 
