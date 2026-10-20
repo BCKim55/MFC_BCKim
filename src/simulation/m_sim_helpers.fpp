@@ -192,6 +192,8 @@ contains
                 k_mix = k_mix + alpha(i)*fluid_k_therm(i)
                 rho_cv = rho_cv + alpha_rho(i)*cvs(i)
             end do
+            ! power-law viscosity: Re_l carries mu/mu0 (m_time_steppers), and k scales with mu
+            if (mu_T_scale > 0._wp) k_mix = k_mix/(fluid_inv_re(1)*Re_l(1))
 
             if (p > 0) then
                 if (grid_geometry == 3) then
@@ -298,6 +300,8 @@ contains
                 k_mix = k_mix + alpha(i)*fluid_k_therm(i)
                 rho_cv = rho_cv + alpha_rho(i)*cvs(i)
             end do
+            ! power-law viscosity: Re_l carries mu/mu0 (m_time_steppers), and k scales with mu
+            if (mu_T_scale > 0._wp) k_mix = k_mix/(fluid_inv_re(1)*Re_l(1))
 
             if (p > 0) then
                 if (grid_geometry == 3) then

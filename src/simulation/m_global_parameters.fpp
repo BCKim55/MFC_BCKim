@@ -1008,7 +1008,7 @@ contains
 
         ! power-law viscosity mu = mu0 (T/mu_T_ref)^mu_T_exp: R T = p/rho = cv/gammas T, so T/T_ref = (p/rho) gammas/(cv mu_T_ref)
         if (mu_T_exp > 0._wp) mu_T_scale = fluid_pp(1)%gamma/(fluid_pp(1)%cv*mu_T_ref)
-        $:GPU_UPDATE(device='[mu_T_exp, mu_T_scale]')
+        $:GPU_UPDATE(device='[mu_T_exp, mu_T_ref, mu_T_scale]')
 
         $:GPU_UPDATE(device='[Bx0]')
 

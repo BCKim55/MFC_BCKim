@@ -1168,7 +1168,7 @@ This parameter enables the use of true `pi_\infty` in bubble dynamics models whe
 | `g_x[y,z]`           | Real    | Magnitude of background acceleration                                     |
 | `bf_spatial_support` | Logical | Enable spatially supported body force (Wei & Freund, JFM 2005)           |
 | `const_mean_T`       | Logical | Hold the gas-phase mean temperature at its initial value (Khalloufi & Capecelatro 2023 thermal forcing) |
-| `mu_T_exp`                    | Real    | Exponent of the power-law viscosity \f$\mu = \mu_0 (T/T_{\mu})^{n}\f$ (single perfect gas; 0 = constant). |
+| `mu_T_exp`                    | Real    | Exponent of the power-law viscosity \f$\mu = \mu_0 (T/T_{\mu})^{n}\f$ (single perfect gas; 0 = constant). `fluid_pp(1)%%k_therm` is scaled by the same factor, so the Prandtl number stays constant. |
 | `mu_T_ref`                    | Real    | Reference temperature \f$T_\mu\f$ [K] of the power-law viscosity. Requires `fluid_pp(1)%%cv`. |
 | `const_mean_rho`     | Logical | Hold the gas-phase mean density at its initial value (Khalloufi & Capecelatro 2023 mass source) |
 | `const_mass_flux`    | Logical | Hold the gas-phase mean x-momentum at its initial value (Khalloufi & Capecelatro 2023 constant mass flow rate) |

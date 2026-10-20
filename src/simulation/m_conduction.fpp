@@ -66,6 +66,9 @@ contains
                         alpha_face = min(max(alpha_face, 0._wp), 1._wp)
                         k_face = k_face + alpha_face*fluid_k_therm(i)
                     end do
+                    ! power-law viscosity: k follows mu, (T/mu_T_ref)**mu_T_exp, so the Prandtl number stays constant
+                    if (mu_T_scale > 0._wp) k_face = k_face*(0.5_wp*(q_T_sf%sf(x, y, z) + q_T_sf%sf(x + offsets_c(1), &
+                        & y + offsets_c(2), z + offsets_c(3)))/mu_T_ref)**mu_T_exp
 
                     dT_dxi = (q_T_sf%sf(x + offsets_c(1), y + offsets_c(2), z + offsets_c(3)) - q_T_sf%sf(x, y, z))/grid_spacing
 
@@ -118,6 +121,7 @@ contains
                         alpha_cell = min(max(q_prim_vf(eqn_idx%adv%beg + i - 1)%sf(j, k, l), 0._wp), 1._wp)
                         k_cell = k_cell + alpha_cell*fluid_k_therm(i)
                     end do
+                    if (mu_T_scale > 0._wp) k_cell = k_cell*(q_T_sf%sf(j, k, l)/mu_T_ref)**mu_T_exp
 
                     ! Distance-weighted central difference. The axisymmetric grid halves the cell at
                     ! r = 0, so the plain form would be only first order over exactly this stencil.

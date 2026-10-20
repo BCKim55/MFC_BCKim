@@ -228,7 +228,7 @@ DESCRIPTIONS = {
     "bf_y": "Enable body force in y-direction",
     "bf_z": "Enable body force in z-direction",
     "const_mean_T": "Hold the gas-phase mean temperature at its initial value (Khalloufi & Capecelatro 2023 thermal forcing)",
-    "mu_T_exp": "Exponent n of the power-law viscosity mu = mu0 (T/mu_T_ref)^n (0 = constant viscosity)",
+    "mu_T_exp": "Exponent n of the power-law viscosity mu = mu0 (T/mu_T_ref)^n (0 = constant viscosity); k_therm scales the same way (constant Prandtl number)",
     "mu_T_ref": "Reference temperature of the power-law viscosity",
     "const_mean_rho": "Hold the gas-phase mean density at its initial value (Khalloufi & Capecelatro 2023 mass source)",
     "const_mass_flux": "Hold the gas-phase mean x-momentum at its initial value (Khalloufi & Capecelatro 2023 constant mass flow rate)",
