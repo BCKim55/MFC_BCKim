@@ -1035,7 +1035,7 @@ contains
 
         ! LSO stat index layout. Must run before s_initialize_lso_filter_module.
         ! Block sizes: phi_p (1), rho scalar (1), rhoke scalar (1),
-        ! u_p / rho*u / rho*u*|u|^2 / rho*u*T / q / (tau*u)_i (num_dims each),
+        ! u_p / rho*u / rho*u*|u|^2 / rho*u*T / q / (tau*u)_i / gas_mask*u (num_dims each),
         ! rho*u*u and tau (1/3/6 entries in 1D/2D/3D, upper triangle).
         if (lso_filter_wrt .and. lso_stat_wrt) then
             lso_stat_phi_p_beg = 1
@@ -1066,7 +1066,9 @@ contains
             lso_stat_q_end = lso_stat_q_beg + num_dims - 1
             lso_stat_rhotau_u_beg = lso_stat_q_end + 1
             lso_stat_rhotau_u_end = lso_stat_rhotau_u_beg + num_dims - 1
-            n_lso_stat = lso_stat_rhotau_u_end
+            lso_stat_gu_beg = lso_stat_rhotau_u_end + 1
+            lso_stat_gu_end = lso_stat_gu_beg + num_dims - 1
+            n_lso_stat = lso_stat_gu_end
         end if
 
         ! Downsampled grid sizes (needed before s_initialize_lso_filter_module).

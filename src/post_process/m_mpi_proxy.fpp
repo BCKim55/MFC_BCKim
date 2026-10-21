@@ -86,6 +86,7 @@ contains
             & 'lso_stat_tau_beg', 'lso_stat_tau_end',                          &
             & 'lso_stat_q_beg', 'lso_stat_q_end',                              &
             & 'lso_stat_rhotau_u_beg', 'lso_stat_rhotau_u_end',                      &
+            & 'lso_stat_gu_beg', 'lso_stat_gu_end',                            &
             & 'lso_pp_n_passes_x', 'lso_pp_n_passes_y', 'lso_pp_n_passes_z',                &
             & 'lso_pp2_n_passes_x', 'lso_pp2_n_passes_y', 'lso_pp2_n_passes_z' ]
             call MPI_BCAST(${VAR}$, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)

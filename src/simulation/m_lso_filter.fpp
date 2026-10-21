@@ -1015,8 +1015,8 @@ contains
 
     end subroutine s_lso_filter_ghost_refresh
 
-    !> Build the 9/19/31 stat product fields used by the LES closure. Pass 1 fills the algebraic moments (phi_p, u_p, rho*u,
-    !! rho*u*u, rho*u*|u|^2, rho*u*T). Pass 2 (viscous .and. lso_mu > 0) adds tau_ij, q_i, and (tau*u)_i from centred gradients,
+    !> Build the 12/23/36 stat product fields used by the LES closure. Pass 1 fills the algebraic moments (phi_p, u_p, rho*u,
+    !! rho*u*u, rho*u*|u|^2, rho*u*T, u). Pass 2 (viscous .and. lso_mu > 0) adds tau_ij, q_i, and (tau*u)_i from centred gradients,
     !! masked by gas_mask = 1 - phi_p. Both passes run on the GPU.
     impure subroutine s_compute_lso_stat_fields(q_cons_vf)
 
@@ -1126,6 +1126,11 @@ contains
                     q_lso_stat_vf(lso_stat_rhouT_beg)%sf(j, k, l) = real(gas_mask*mom1*T_loc, stp)
                     if (n > 0) q_lso_stat_vf(lso_stat_rhouT_beg + 1)%sf(j, k, l) = real(gas_mask*mom2*T_loc, stp)
                     if (p > 0) q_lso_stat_vf(lso_stat_rhouT_beg + 2)%sf(j, k, l) = real(gas_mask*mom3*T_loc, stp)
+
+                    ! gas_mask*u: F[g u] + F[phi_p u_p] is the mixture velocity of the residual viscous stress
+                    q_lso_stat_vf(lso_stat_gu_beg)%sf(j, k, l) = real(gas_mask*u1, stp)
+                    if (n > 0) q_lso_stat_vf(lso_stat_gu_beg + 1)%sf(j, k, l) = real(gas_mask*u2, stp)
+                    if (p > 0) q_lso_stat_vf(lso_stat_gu_beg + 2)%sf(j, k, l) = real(gas_mask*u3, stp)
 
                     ! Zero the viscous-pass slots.
                     do i = lso_stat_tau_beg, lso_stat_tau_end

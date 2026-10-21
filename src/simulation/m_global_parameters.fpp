@@ -382,7 +382,7 @@ module m_global_parameters
     !> @name LSO statistical product fields for LES subgrid modeling
     !> @{
     logical :: lso_stat_wrt  !< Enable writing of filtered statistical product fields (phi_p, rho*u, tau, etc.)
-    integer :: n_lso_stat    !< Total number of statistical variables (11 in 1D, 21 in 2D, 33 in 3D)
+    integer :: n_lso_stat    !< Total number of statistical variables (12 in 1D, 23 in 2D, 36 in 3D)
     !> Block begin/end indices into q_lso_stat_vf(1:n_lso_stat)
     integer :: lso_stat_phi_p_beg, lso_stat_phi_p_end    !< phi_p: particle indicator (1 component)
     integer :: lso_stat_rho_beg, lso_stat_rho_end        !< gas rho scalar: gas_mask*rho (1 component)
@@ -405,6 +405,7 @@ module m_global_parameters
     integer :: lso_stat_tau_beg, lso_stat_tau_end            !< viscous stress tau_ij (1/3/6 components)
     integer :: lso_stat_q_beg, lso_stat_q_end                !< heat flux q_i (num_dims components)
     integer :: lso_stat_rhotau_u_beg, lso_stat_rhotau_u_end  !< viscous power flux (tau*u)_i (num_dims components)
+    integer :: lso_stat_gu_beg, lso_stat_gu_end              !< gas_mask*u, for the mixture velocity (num_dims components)
     !> @}
 
     !> @name Bubble modeling
@@ -733,6 +734,7 @@ contains
         lso_stat_tau_beg = 0; lso_stat_tau_end = 0
         lso_stat_q_beg = 0; lso_stat_q_end = 0
         lso_stat_rhotau_u_beg = 0; lso_stat_rhotau_u_end = 0
+        lso_stat_gu_beg = 0; lso_stat_gu_end = 0
 
         ! Bubble modeling
         bubbles_euler = .false.

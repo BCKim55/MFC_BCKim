@@ -218,6 +218,7 @@ module m_global_parameters
     integer :: lso_stat_tau_beg, lso_stat_tau_end  !< viscous stress tau_ij
     integer :: lso_stat_q_beg, lso_stat_q_end  !< heat flux q_i
     integer :: lso_stat_rhotau_u_beg, lso_stat_rhotau_u_end  !< viscous power flux (tau*u)_i
+    integer :: lso_stat_gu_beg, lso_stat_gu_end  !< gas_mask*u (mixture velocity)
 
     !> @name LSO post-process Gaussian FIR filter
     !> @{
@@ -471,6 +472,7 @@ contains
         lso_stat_tau_beg = 0; lso_stat_tau_end = 0
         lso_stat_q_beg = 0; lso_stat_q_end = 0
         lso_stat_rhotau_u_beg = 0; lso_stat_rhotau_u_end = 0
+        lso_stat_gu_beg = 0; lso_stat_gu_end = 0
         lso_pp_filter = .false.
         lso_closure_wrt = .false.
         lso_pp_n_passes_x = 0

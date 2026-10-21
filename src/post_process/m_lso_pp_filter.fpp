@@ -233,20 +233,21 @@ contains
     !> Euler-Lagrange closure fields from the LSO stat products, with F[.] the phase-weighted filter, rho_b = F[rho], u~ = F[rho
     !! u]/rho_b and T~ from F[rho T] = (F[E] - F[rho|u|^2]/2)/Cv, F[E] = E_lso*w: R_sg,ij = F[rho u_i u_j] - F[rho u_i] F[rho
     !! u_j]/rho_b Q_T,i = gamma Cv (F[rho u_i T] - T~ F[rho u_i]) E_ku,i = (F[rho u_i |u|^2] - F[rho u_i] F[rho |u|^2]/rho_b)/2
-    !! W_tau_u,i = (F[rho (tau.u)_i] - (tau_b . F[rho u])_i)/rho_b R_mu_sg = tau_b - mu(T~) [grad(u~) + grad(u~)^T - (2/3) div(u~)
-    !! I] R_lam_sg = q_b + lambda(T~) grad(T~), with the intensive averages tau_b = F[g tau]/w and q_b = F[g q]/w, and mu, lambda
-    !! from the lso_mu_T_exp power law at T~. Gradients are centred differences on the output grid with ghost-refreshed Favre
-    !! fields; layout per f_lso_n_closure().
+    !! W_tau_u,i = (F[rho (tau.u)_i] - (tau_b . F[rho u])_i)/rho_b, and the residual viscous stress and conductive heat flux of the
+    !! team notes (Eqs. 1.7-1.10): R_mu_sg = tau_b - mu(T~) [grad(u_m) + grad(u_m)^T - (2/3) div(u_m) I], R_lam_sg = q_b -
+    !! (-lambda(T~) grad(T~)), with the intensive averages tau_b = F[g tau]/w and q_b = F[g q]/w, the mixture velocity u_m = F[g u]
+    !! + F[phi_p u_p], and mu, lambda from the lso_mu_T_exp power law at T~. Gradients are centred differences on the output grid
+    !! with ghost-refreshed fields; layout per f_lso_n_closure().
     impure subroutine s_compute_lso_closure_fields(q_stat_vf, q_cons_vf, w_vf, q_cls_vf)
 
         type(scalar_field), intent(in)    :: q_stat_vf(:), q_cons_vf(:), w_vf(1:1)
         type(scalar_field), intent(inout) :: q_cls_vf(:)
-        type(scalar_field)                :: uT_vf(1:4)
+        type(scalar_field)                :: uT_vf(1:7)  !< u~ (nd), T~, u_m (nd)
         integer                           :: nd, nt, i, c, j, k, l, a, b
         integer                           :: ti(6), tj(6)
         integer                           :: i_rsg, i_qt, i_eku, i_wtu, i_rmu, i_rlam, i_tt, i_uf
-        real(wp)                          :: Cv, gcv, rho_b, F_E, wloc, dsp(3), fprop
-        real(wp)                          :: rhou(3), tdotru(3), dudx(3, 3), dT(3), div_u, tau_res, tb(3, 3)
+        real(wp)                          :: Cv, gcv, rho_b, F_E, wloc, dsp(3), fprop, div_m
+        real(wp)                          :: rhou(3), tdotru(3), dumdx(3, 3), dT(3), tau_res, tb(3, 3)
 
         nd = num_dims
         nt = nd*(nd + 1)/2
@@ -261,8 +262,8 @@ contains
         Cv = lso_R_gas*gammas(1)
         gcv = (1._wp + 1._wp/gammas(1))*Cv
 
-        ! Favre velocity and temperature with ghost extents for the gradient stencils.
-        do i = 1, nd + 1
+        ! Favre velocity, Favre temperature and mixture velocity with ghost extents for the gradient stencils.
+        do i = 1, 2*nd + 1
             allocate (uT_vf(i)%sf(lbound(q_cons_vf(1)%sf, 1):ubound(q_cons_vf(1)%sf, 1),lbound(q_cons_vf(1)%sf, &
                       & 2):ubound(q_cons_vf(1)%sf, 2),lbound(q_cons_vf(1)%sf, 3):ubound(q_cons_vf(1)%sf, 3)))
         end do
@@ -276,12 +277,20 @@ contains
                     F_E = real(q_cons_vf(eqn_idx%E)%sf(j, k, l), wp)*real(w_vf(1)%sf(j, k, l), wp)
                     uT_vf(nd + 1)%sf(j, k, l) = real((F_E - 0.5_wp*real(q_stat_vf(lso_stat_rhoke_beg)%sf(j, k, l), &
                           & wp))/(Cv*rho_b), stp)
+                    do a = 1, nd
+                        uT_vf(nd + 1 + a)%sf(j, k, l) = real(real(q_stat_vf(lso_stat_gu_beg + a - 1)%sf(j, k, l), &
+                              & wp) + real(q_stat_vf(lso_stat_up_beg + a - 1)%sf(j, k, l), wp), stp)
+                    end do
                 end do
             end do
         end do
-        call s_lso_pp_filter_ghost_refresh(uT_vf(1:nd + 1), 1)
-        if (n > 0) call s_lso_pp_filter_ghost_refresh(uT_vf(1:nd + 1), 2)
-        if (p > 0) call s_lso_pp_filter_ghost_refresh(uT_vf(1:nd + 1), 3)
+        ! in chunks of at most sys_size fields, the size of the shared MPI halo buffers (2 nd + 1 = 7 > sys_size in 3D)
+        do c = 1, 2*nd + 1, sys_size
+            b = min(2*nd + 1, c + sys_size - 1)
+            call s_lso_pp_filter_ghost_refresh(uT_vf(c:b), 1)
+            if (n > 0) call s_lso_pp_filter_ghost_refresh(uT_vf(c:b), 2)
+            if (p > 0) call s_lso_pp_filter_ghost_refresh(uT_vf(c:b), 3)
+        end do
 
         ! Quasi-uniform output-grid spacing (mean; exact for integer decimation).
         dsp = 1._wp
@@ -306,13 +315,14 @@ contains
                         tb(tj(c), ti(c)) = tb(ti(c), tj(c))
                     end do
 
-                    ! gradients of the Favre fields (centred; ghosts filled above)
-                    dudx = 0._wp; dT = 0._wp
+                    ! gradients of the mixture velocity and the Favre temperature (centred; ghosts filled above)
+                    dumdx = 0._wp; dT = 0._wp
                     do a = 1, nd
-                        dudx(a, 1) = (real(uT_vf(a)%sf(j + 1, k, l), wp) - real(uT_vf(a)%sf(j - 1, k, l), wp))/(2._wp*dsp(1))
-                        if (n > 0) dudx(a, 2) = (real(uT_vf(a)%sf(j, k + 1, l), wp) - real(uT_vf(a)%sf(j, k - 1, l), &
+                        i = nd + 1 + a
+                        dumdx(a, 1) = (real(uT_vf(i)%sf(j + 1, k, l), wp) - real(uT_vf(i)%sf(j - 1, k, l), wp))/(2._wp*dsp(1))
+                        if (n > 0) dumdx(a, 2) = (real(uT_vf(i)%sf(j, k + 1, l), wp) - real(uT_vf(i)%sf(j, k - 1, l), &
                             & wp))/(2._wp*dsp(2))
-                        if (p > 0) dudx(a, 3) = (real(uT_vf(a)%sf(j, k, l + 1), wp) - real(uT_vf(a)%sf(j, k, l - 1), &
+                        if (p > 0) dumdx(a, 3) = (real(uT_vf(i)%sf(j, k, l + 1), wp) - real(uT_vf(i)%sf(j, k, l - 1), &
                             & wp))/(2._wp*dsp(3))
                     end do
                     dT(1) = (real(uT_vf(nd + 1)%sf(j + 1, k, l), wp) - real(uT_vf(nd + 1)%sf(j - 1, k, l), wp))/(2._wp*dsp(1))
@@ -320,9 +330,9 @@ contains
                         & wp))/(2._wp*dsp(2))
                     if (p > 0) dT(3) = (real(uT_vf(nd + 1)%sf(j, k, l + 1), wp) - real(uT_vf(nd + 1)%sf(j, k, l - 1), &
                         & wp))/(2._wp*dsp(3))
-                    div_u = 0._wp
+                    div_m = 0._wp
                     do a = 1, nd
-                        div_u = div_u + dudx(a, a)
+                        div_m = div_m + dumdx(a, a)
                     end do
                     ! mu(T~), lambda(T~): power law at the Favre temperature (1 when lso_mu_T_exp = 0)
                     fprop = 1._wp
@@ -349,13 +359,13 @@ contains
                         q_cls_vf(i_wtu + a)%sf(j, k, l) = real((real(q_stat_vf(lso_stat_rhotau_u_beg + a - 1)%sf(j, k, l), &
                                  & wp) - tdotru(a))/rho_b, stp)
                     end do
-                    ! R_mu_sg (filtered minus resolved, same tau convention as the solver)
+                    ! R_mu_sg = tau_b - tau(mu(T~), u_m) (notes Eqs. 1.7, 1.9)
                     do c = 1, nt
-                        tau_res = fprop*lso_mu*(dudx(ti(c), tj(c)) + dudx(tj(c), ti(c)))
-                        if (ti(c) == tj(c)) tau_res = tau_res - (2._wp/3._wp)*fprop*lso_mu*div_u
+                        tau_res = fprop*lso_mu*(dumdx(ti(c), tj(c)) + dumdx(tj(c), ti(c)))
+                        if (ti(c) == tj(c)) tau_res = tau_res - (2._wp/3._wp)*fprop*lso_mu*div_m
                         q_cls_vf(i_rmu + c)%sf(j, k, l) = real(tb(ti(c), tj(c)) - tau_res, stp)
                     end do
-                    ! R_lam_sg (stored q = -lambda grad T; resolved uses the same sign)
+                    ! R_lam_sg = q_b - q(lambda(T~), T~) with q = -lambda grad T, as the stored q (notes Eqs. 1.8, 1.10)
                     do a = 1, nd
                         q_cls_vf(i_rlam + a)%sf(j, k, l) = real(real(q_stat_vf(lso_stat_q_beg + a - 1)%sf(j, k, l), &
                                  & wp)/wloc - (-fprop*lso_conductivity*dT(a)), stp)
@@ -369,7 +379,7 @@ contains
             end do
         end do
 
-        do i = 1, nd + 1
+        do i = 1, 2*nd + 1
             deallocate (uT_vf(i)%sf)
         end do
 
@@ -555,6 +565,11 @@ contains
                     q_lso_pp_stat_vf(lso_stat_rhouT_beg)%sf(j, k, l) = real(mom1*T_loc, stp)
                     if (n > 0) q_lso_pp_stat_vf(lso_stat_rhouT_beg + 1)%sf(j, k, l) = real(mom2*T_loc, stp)
                     if (p > 0) q_lso_pp_stat_vf(lso_stat_rhouT_beg + 2)%sf(j, k, l) = real(mom3*T_loc, stp)
+
+                    ! u (gas-masked below): F[g u] + F[phi_p u_p] is the mixture velocity of the residual viscous stress
+                    q_lso_pp_stat_vf(lso_stat_gu_beg)%sf(j, k, l) = real(u1, stp)
+                    if (n > 0) q_lso_pp_stat_vf(lso_stat_gu_beg + 1)%sf(j, k, l) = real(u2, stp)
+                    if (p > 0) q_lso_pp_stat_vf(lso_stat_gu_beg + 2)%sf(j, k, l) = real(u3, stp)
 
                     ! Zero the viscous-pass slots.
                     do i = lso_stat_tau_beg, lso_stat_tau_end

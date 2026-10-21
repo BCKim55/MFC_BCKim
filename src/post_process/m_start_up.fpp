@@ -139,7 +139,9 @@ contains
                     lso_stat_q_end = lso_stat_q_beg + loc_num_dims - 1
                     lso_stat_rhotau_u_beg = lso_stat_q_end + 1
                     lso_stat_rhotau_u_end = lso_stat_rhotau_u_beg + loc_num_dims - 1
-                    n_lso_stat = lso_stat_rhotau_u_end
+                    lso_stat_gu_beg = lso_stat_rhotau_u_end + 1
+                    lso_stat_gu_end = lso_stat_gu_beg + loc_num_dims - 1
+                    n_lso_stat = lso_stat_gu_end
                 end block
             end if
 
@@ -175,7 +177,9 @@ contains
                     lso_stat_q_end = lso_stat_q_beg + loc_num_dims - 1
                     lso_stat_rhotau_u_beg = lso_stat_q_end + 1
                     lso_stat_rhotau_u_end = lso_stat_rhotau_u_beg + loc_num_dims - 1
-                    n_lso_stat = lso_stat_rhotau_u_end
+                    lso_stat_gu_beg = lso_stat_rhotau_u_end + 1
+                    lso_stat_gu_end = lso_stat_gu_beg + loc_num_dims - 1
+                    n_lso_stat = lso_stat_gu_end
                 end block
             end if
 
@@ -890,7 +894,7 @@ contains
         integer, dimension(MPI_STATUS_SIZE)  :: status
         integer(kind=MPI_OFFSET_KIND)        :: disp
         integer(kind=MPI_OFFSET_KIND)        :: m_MOK, n_MOK, p_MOK
-        integer(kind=MPI_OFFSET_KIND)        :: WP_MOK, var_MOK, MOK
+        integer(kind=MPI_OFFSET_KIND)        :: WP_MOK, var_MOK, MOK, fsize
         integer, dimension(num_dims)         :: sizes_glb, sizes_loc, start_stat
         integer                              :: mpi_view
         character(LEN=path_len + 2*name_len) :: file_loc
@@ -925,6 +929,9 @@ contains
         end if
         ! MPI_COMM_SELF so ranks open independently (collective open would deadlock if some ranks skip this path).
         call MPI_FILE_OPEN(MPI_COMM_SELF, file_loc, MPI_MODE_RDONLY, MPI_INFO_NULL, ifile, ierr)
+        call MPI_FILE_GET_SIZE(ifile, fsize, ierr)
+        @:PROHIBIT(fsize < m_MOK*max(MOK, n_MOK)*max(MOK, p_MOK)*WP_MOK*int(n_stat, MPI_OFFSET_KIND), &
+                   & "LSO stat file holds fewer fields than expected (written by an older simulation build?)")
 
         do i = 1, n_stat
             call MPI_TYPE_CREATE_SUBARRAY(num_dims, sizes_glb, sizes_loc, start_stat, MPI_ORDER_FORTRAN, mpi_p, mpi_view, ierr)
@@ -1393,6 +1400,21 @@ contains
         if (num_dims == 3) then
             varname = 'rho_tau_u_z'
             call s_put_lso_var(q_stat_vf(lso_stat_rhotau_u_beg + 2))
+            call s_write_variable_to_formatted_database_file(varname, t_step)
+        end if
+
+        ! gas_mask*u
+        varname = 'g_u_x'
+        call s_put_lso_var(q_stat_vf(lso_stat_gu_beg))
+        call s_write_variable_to_formatted_database_file(varname, t_step)
+        if (num_dims >= 2) then
+            varname = 'g_u_y'
+            call s_put_lso_var(q_stat_vf(lso_stat_gu_beg + 1))
+            call s_write_variable_to_formatted_database_file(varname, t_step)
+        end if
+        if (num_dims == 3) then
+            varname = 'g_u_z'
+            call s_put_lso_var(q_stat_vf(lso_stat_gu_beg + 2))
             call s_write_variable_to_formatted_database_file(varname, t_step)
         end if
 
