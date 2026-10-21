@@ -11,7 +11,7 @@ program p_main
     use m_data_input, only: q_cons_vf, lso_step_found
     use m_derived_types, only: scalar_field
     use m_lso_pp_filter, only: s_apply_lso_pp_filter, s_compute_lso_pp_stat_fields, s_apply_lso_pp_filter_masked, &
-        & s_lso_pp_mask_from_ib
+        & s_lso_pp_mask_from_ib, s_write_lso_pp_pyramid_files
 
     implicit none
 
@@ -100,47 +100,53 @@ program p_main
                 end if
             end if
 
-            call s_save_data(t_step, varname, pres, c, H)
-
-            ! Secondary pass: when lso_filter_wrt=T, also write the unfiltered data to silo_hdf5/. Grid files are NOT re-opened
-            ! (grid_loaded flag skips them), avoiding a known MPI-IO hang from re-opening the same file with
-            ! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) a second time. NOTE: When lso_down_sample_factor > 1 the LSO files are on a coarser
-            ! grid
-            ! than the unfiltered data. The secondary pass cannot switch grid dimensions at runtime, so it is skipped. Run
-            ! post_process
-            ! again with lso_filter_wrt=.false. to process the full-resolution unfiltered data.
-            if (lso_filter_wrt .and. lso_down_sample_factor <= 1) then
-                lso_filter_wrt = .false.
-                call s_reload_data(t_step)
-                call s_switch_output_dirs(.false.)
+            ! Pyramid stage 1: the filtered fields leave as coarse lso_ restart files for a second (widening) run, no Silo.
+            if (lso_pp_pyramid_wrt) then
+                call s_write_lso_pp_pyramid_files(q_cons_vf, t_step)
+            else
                 call s_save_data(t_step, varname, pres, c, H)
-                call s_switch_output_dirs(.true.)
-                lso_filter_wrt = .true.
-            end if
 
-            ! Third pass: LSO statistical product fields to silo_hdf5_lso_stat/ (computed above in post_process
-            ! filter mode, otherwise read from the simulation-written lso_stat binary).
-            if (lso_stat_wrt) then
-                if (lso_pp_filter) then
-                    call s_save_lso_pp_stat_data(t_step)
-                else if (lso_filter_wrt) then
-                    call s_save_lso_stat_data(t_step)
+                ! Secondary pass: when lso_filter_wrt=T, also write the unfiltered data to silo_hdf5/. Grid files are NOT re-opened
+                ! (grid_loaded flag skips them), avoiding a known MPI-IO hang from re-opening the same file with
+                ! MPI_FILE_OPEN(MPI_COMM_WORLD, fp) a second time. NOTE: When lso_down_sample_factor > 1 the LSO files are on a
+                ! coarser
+                ! grid
+                ! than the unfiltered data. The secondary pass cannot switch grid dimensions at runtime, so it is skipped. Run
+                ! post_process
+                ! again with lso_filter_wrt=.false. to process the full-resolution unfiltered data.
+                if (lso_filter_wrt .and. lso_down_sample_factor <= 1) then
+                    lso_filter_wrt = .false.
+                    call s_reload_data(t_step)
+                    call s_switch_output_dirs(.false.)
+                    call s_save_data(t_step, varname, pres, c, H)
+                    call s_switch_output_dirs(.true.)
+                    lso_filter_wrt = .true.
                 end if
-            end if
 
-            ! Fourth pass: Euler-Lagrange closure fields to silo_hdf5_lso_closure/, at the in-situ width or
-            ! (lso_pp_filter with downsampled input) at the widened width.
-            if (lso_closure_wrt) then
-                if (lso_filter_wrt .and. lso_stat_wrt .and. .not. lso_pp_filter) then
-                    call s_save_lso_closure_data(t_step)
-                else if (lso_filter_wrt .and. lso_stat_wrt .and. lso_pp_filter .and. lso_down_sample_factor > 1) then
-                    call s_save_lso_pp_closure_data(t_step)
-                else if (lso_pp_filter .and. lso_stat_wrt .and. .not. lso_filter_wrt) then
-                    call s_save_lso_pp_raw_closure_data(t_step)
-                else if (proc_rank == 0 .and. t_step == t_step_start) then
-                    print '(A)', &
-                        & 'Warning: lso_closure_wrt requires lso_stat_wrt=T and lso_filter_wrt=T or lso_pp_filter=T ' &
-                        & // '(both: lso_down_sample_factor>1); closure output skipped.'
+                ! Third pass: LSO statistical product fields to silo_hdf5_lso_stat/ (computed above in post_process
+                ! filter mode, otherwise read from the simulation-written lso_stat binary).
+                if (lso_stat_wrt) then
+                    if (lso_pp_filter) then
+                        call s_save_lso_pp_stat_data(t_step)
+                    else if (lso_filter_wrt) then
+                        call s_save_lso_stat_data(t_step)
+                    end if
+                end if
+
+                ! Fourth pass: Euler-Lagrange closure fields to silo_hdf5_lso_closure/, at the in-situ width or
+                ! (lso_pp_filter with downsampled input) at the widened width.
+                if (lso_closure_wrt) then
+                    if (lso_filter_wrt .and. lso_stat_wrt .and. .not. lso_pp_filter) then
+                        call s_save_lso_closure_data(t_step)
+                    else if (lso_filter_wrt .and. lso_stat_wrt .and. lso_pp_filter .and. lso_down_sample_factor > 1) then
+                        call s_save_lso_pp_closure_data(t_step)
+                    else if (lso_pp_filter .and. lso_stat_wrt .and. .not. lso_filter_wrt) then
+                        call s_save_lso_pp_raw_closure_data(t_step)
+                    else if (proc_rank == 0 .and. t_step == t_step_start) then
+                        print '(A)', &
+                            & 'Warning: lso_closure_wrt requires lso_stat_wrt=T and lso_filter_wrt=T or lso_pp_filter=T ' &
+                            & // '(both: lso_down_sample_factor>1); closure output skipped.'
+                    end if
                 end if
             end if
         end if

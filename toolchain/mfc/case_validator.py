@@ -1685,6 +1685,24 @@ class CaseValidator:
             if alpha_wrt:
                 self.prohibit(model_eqns == 1, f"alpha_wrt({i}) is not supported for model_eqns = 1")
 
+    def check_lso_pp_pyramid(self):
+        """Checks constraints on the post_process LSO pyramid stage 1 (lso_pp_pyramid_wrt)"""
+        if self.get("lso_pp_pyramid_wrt", "F") != "T":
+            return
+        fac = int(self.get("lso_down_sample_factor", 1))
+        self.prohibit(
+            self.get("lso_pp_filter", "F") != "T" or self.get("lso_filter_wrt", "F") == "T",
+            "lso_pp_pyramid_wrt filters the original data: it needs lso_pp_filter = T and lso_filter_wrt = F",
+        )
+        self.prohibit(fac < 2, "lso_pp_pyramid_wrt needs lso_down_sample_factor >= 2 (the decimation factor)")
+        self.prohibit(
+            self.get("parallel_io", "F") != "T" or self.get("file_per_process", "F") == "T",
+            "lso_pp_pyramid_wrt writes shared MPI-IO lso_ files: it needs parallel_io = T and file_per_process = F",
+        )
+        for d in ("m", "n", "p"):
+            v = int(self.get(d, 0) or 0)
+            self.prohibit(v > 0 and fac >= 2 and (v + 1) % fac != 0, f"lso_pp_pyramid_wrt needs {d} + 1 divisible by lso_down_sample_factor")
+
     def check_fft(self):
         """Checks FFT output constraints (post-process)"""
         fft_wrt = self.get("fft_wrt", "F") == "T"
@@ -2147,6 +2165,7 @@ class CaseValidator:
         self.check_surface_tension_post()
         self.check_no_flow_variables()
         self.check_chemistry()
+        self.check_lso_pp_pyramid()
 
     def validate(self, stage: str = "simulation"):
         """Main validation method

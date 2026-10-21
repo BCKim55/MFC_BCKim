@@ -981,6 +981,7 @@ def _load():
     for n in ["lso_pp_a_x", "lso_pp_a_y", "lso_pp_a_z"]:
         _r(n, REAL, {"filter"})
     _r("lso_closure_wrt", LOG, {"filter"})
+    _r("lso_pp_pyramid_wrt", LOG, {"filter"})
     _r("lso_mu", REAL, {"filter"})
     _r("lso_conductivity", REAL, {"filter"})
     _r("lso_mu_T_exp", REAL, {"filter"})

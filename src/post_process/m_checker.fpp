@@ -22,6 +22,11 @@ contains
     impure subroutine s_check_inputs
 
         @:PROHIBIT(lso_mu_T_exp > 0._wp .and. lso_mu_T_ref <= 0._wp, "lso_mu_T_exp > 0 requires lso_mu_T_ref > 0")
+        @:PROHIBIT(lso_pp_pyramid_wrt .and. (.not. lso_pp_filter .or. lso_filter_wrt), &
+                   & "lso_pp_pyramid_wrt needs lso_pp_filter = T on the original data (lso_filter_wrt = F)")
+        @:PROHIBIT(lso_pp_pyramid_wrt .and. lso_down_sample_factor < 2, "lso_pp_pyramid_wrt needs lso_down_sample_factor >= 2")
+        @:PROHIBIT(lso_pp_pyramid_wrt .and. (.not. parallel_io .or. file_per_process), &
+                   & "lso_pp_pyramid_wrt needs parallel_io = T and file_per_process = F")
 
     end subroutine s_check_inputs
 

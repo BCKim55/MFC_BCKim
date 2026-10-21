@@ -247,6 +247,15 @@ class Case:
 
         sigma2 = math.sqrt(sigma_target**2 - sigma_in**2)
 
+        # Pyramid stage 1 decimates the filtered data by F: sigma below ~1.53 F cells aliases (attenuation ~1e-5 at pi/F).
+        if str(p.get("lso_pp_pyramid_wrt", "F")).upper() == "T":
+            for tag, d in (("x", dx), ("y", dy), ("z", dz)):
+                if d > 0.0 and sigma2 / d < 1.53 * factor:
+                    cons.print(
+                        f"[yellow]Warning:[/yellow] LSO pyramid stage 1: sigma = {sigma2 / d:.1f} cells in {tag} is below the "
+                        f"~{1.53 * factor:.1f}-cell anti-aliasing minimum for {factor}x decimation; use max(8, 1.6 F) cells."
+                    )
+
         grid_note = f" (coarse grid, stride {factor})" if ds > 1 else ""
         head = f"[cyan]LSO filter (post_process):[/cyan] sigma_in={sigma_in:.4g}, sigma_target={sigma_target:.4g}, sigma2={sigma2:.4g}"
 
@@ -258,9 +267,10 @@ class Case:
             if sigma_stage / d_min > PP_STAGE_MAX_CELLS:
                 raise common.MFCException(
                     f"lso_pp_filter: sigma_2 = {sigma2 / d_min:.1f} cells exceeds what the two post_process "
-                    f"cascades can carry (~{PP_STAGE_MAX_CELLS:.0f} cells each). Filter in situ with "
-                    f"lso_down_sample_factor > 1 so the post_process pass runs on the coarse grid, or lower "
-                    f"lso_filter_sigma_target."
+                    f"cascades can carry (~{PP_STAGE_MAX_CELLS:.0f} cells each). Run a pyramid instead: a first post_process "
+                    f"with lso_pp_pyramid_wrt = T, lso_down_sample_factor = F and a small lso_filter_sigma_target "
+                    f"(~max(8, 1.6 F) cells), then a second with lso_filter_wrt = T and lso_filter_sigma_in set to "
+                    f"that width, which finishes the target on the coarse grid."
                 )
             cons.print(f"{head} as two cascades of {sigma_stage:.4g} ({sigma_stage / d_min:.1f} cells each){grid_note}, computing weights...")
             stage = compute_lso_params(d_p, dx, dy, dz, sigma_stage)

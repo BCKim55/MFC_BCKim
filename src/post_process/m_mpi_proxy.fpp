@@ -105,7 +105,7 @@ contains
             & 'surface_tension', 'hyperelasticity', 'bubbles_lagrange',           &
             & 'output_partial_domain', 'relativity', 'cont_damage', 'bc_io',      &
             & 'down_sample','fft_wrt', 'hyper_cleaning', 'ib_state_wrt', 'lso_filter_wrt', 'lso_stat_wrt', 'lso_closure_wrt', &
-            & 'lso_pp_filter']
+            & 'lso_pp_filter', 'lso_pp_pyramid_wrt']
             call MPI_BCAST(${VAR}$, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
         #:endfor
 

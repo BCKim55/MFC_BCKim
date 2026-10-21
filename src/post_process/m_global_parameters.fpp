@@ -223,14 +223,17 @@ module m_global_parameters
     !> @name LSO post-process Gaussian FIR filter
     !> @{
     integer, parameter :: lso_max_passes = 60  !< Maximum number of filter passes (must match Python LSO_MAX_PASSES)
-    logical            :: lso_pp_filter  !< Apply additional FIR filter in post_process before writing silo_hdf5_lso/
-    logical            :: lso_closure_wrt  !< Compute and write Euler-Lagrange closure fields to silo_hdf5_lso_closure/
-    integer            :: lso_pp_n_passes_x  !< Number of post-process filter passes in x
-    integer            :: lso_pp_n_passes_y  !< Number of post-process filter passes in y
-    integer            :: lso_pp_n_passes_z  !< Number of post-process filter passes in z
-    real(wp)           :: lso_pp_a_x(5, lso_max_passes)  !< Per-pass stencil coefficients in x
-    real(wp)           :: lso_pp_a_y(5, lso_max_passes)  !< Per-pass stencil coefficients in y
-    real(wp)           :: lso_pp_a_z(5, lso_max_passes)  !< Per-pass stencil coefficients in z
+    logical            :: lso_pp_filter        !< Apply additional FIR filter in post_process before writing silo_hdf5_lso/
+    logical            :: lso_closure_wrt      !< Compute and write Euler-Lagrange closure fields to silo_hdf5_lso_closure/
+    !> Pyramid stage 1: write the lso_pp_filter-filtered original data, decimated by lso_down_sample_factor, as the lso_ restart
+    !! files the in-situ pyramid writes (read back by a second post_process run with lso_filter_wrt = T), instead of Silo output
+    logical  :: lso_pp_pyramid_wrt
+    integer  :: lso_pp_n_passes_x              !< Number of post-process filter passes in x
+    integer  :: lso_pp_n_passes_y              !< Number of post-process filter passes in y
+    integer  :: lso_pp_n_passes_z              !< Number of post-process filter passes in z
+    real(wp) :: lso_pp_a_x(5, lso_max_passes)  !< Per-pass stencil coefficients in x
+    real(wp) :: lso_pp_a_y(5, lso_max_passes)  !< Per-pass stencil coefficients in y
+    real(wp) :: lso_pp_a_z(5, lso_max_passes)  !< Per-pass stencil coefficients in z
     !> Stage-2 pass set, on the same grid: > 0 when the toolchain splits a wide target across two cascades whose variances add to
     !! the requested width
     integer  :: lso_pp2_n_passes_x
@@ -475,6 +478,7 @@ contains
         lso_stat_gu_beg = 0; lso_stat_gu_end = 0
         lso_pp_filter = .false.
         lso_closure_wrt = .false.
+        lso_pp_pyramid_wrt = .false.
         lso_pp_n_passes_x = 0
         lso_pp_n_passes_y = 0
         lso_pp_n_passes_z = 0

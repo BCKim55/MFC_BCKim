@@ -24,13 +24,17 @@ module m_lso_pp_filter
     use m_variables_conversion, only: gammas
     use m_data_input, only: ib_markers
 
+#ifdef MFC_MPI
+    use mpi
+#endif
+
     implicit none
 
     private
 
     public :: s_initialize_lso_pp_filter_module, s_finalize_lso_pp_filter_module, s_apply_lso_pp_filter, &
         & s_compute_lso_pp_stat_fields, s_filter_lso_pp_stat_fields, q_lso_pp_stat_vf, s_apply_lso_pp_filter_masked, &
-        & s_lso_pp_mask_from_ib, s_compute_lso_closure_fields, f_lso_n_closure, q_lso_pp_w_vf
+        & s_lso_pp_mask_from_ib, s_compute_lso_closure_fields, f_lso_n_closure, q_lso_pp_w_vf, s_write_lso_pp_pyramid_files
 
     ! Floor on the normalized-convolution denominator filter(w).
     real(wp), parameter :: lso_w_floor = 1.0e-3_wp
@@ -218,6 +222,199 @@ contains
         end do
 
     end subroutine s_apply_lso_pp_filter_masked
+
+    !> Pyramid stage 1 (lso_pp_pyramid_wrt): sample the filtered conserved state, the filtered gas mask w = filter(g) and the
+    !! filtered stat products at the coarse-cell centres of an lso_down_sample_factor coarser grid (as s_lso_stride_sample does in
+    !! simulation) and write them as lso_<t>.dat, lso_mask_<t>.dat, lso_stat_<t>.dat and lso_[xyz]_cb.dat, the files the in-situ
+    !! pyramid writes. A second post_process run with lso_filter_wrt = T then widens them to the target on the coarse grid.
+    impure subroutine s_write_lso_pp_pyramid_files(q_cons_vf, t_step)
+
+        type(scalar_field), intent(in) :: q_cons_vf(:)
+        integer, intent(in)            :: t_step
+
+#ifdef MFC_MPI
+        integer                 :: fac, mc, nc, pc, i
+        integer                 :: nloc(3), sc(3), nglb(3)
+        real(stp), allocatable  :: buf(:,:,:,:)
+        character(LEN=name_len) :: fname
+
+        fac = lso_down_sample_factor
+        nloc = (/m, n, p/)
+        nglb = (/m_glb, n_glb, p_glb/)
+        do i = 1, num_dims
+            @:PROHIBIT(mod(nloc(i) + 1, fac) /= 0 .or. mod(start_idx(i), fac) /= 0, &
+                       & "lso_pp_pyramid_wrt: every rank's block must be divisible by lso_down_sample_factor (change the rank count)")
+        end do
+        sc = 0
+        do i = 1, num_dims
+            sc(i) = start_idx(i)/fac
+            nloc(i) = (nloc(i) + 1)/fac - 1
+            nglb(i) = (nglb(i) + 1)/fac - 1
+        end do
+        mc = nloc(1); nc = nloc(2); pc = nloc(3)
+
+        allocate (buf(0:mc,0:nc,0:pc,1:max(sys_size, n_lso_stat, 1)))
+
+        do i = 1, sys_size
+            call s_lso_pp_decimate(q_cons_vf(i), buf(:,:,:,i), mc, nc, pc)
+        end do
+        write (fname, '(A,I0,A)') 'lso_', t_step, '.dat'
+        call s_write_lso_pp_coarse_file(buf, sys_size, fname, nloc, nglb, sc)
+
+        call s_lso_pp_decimate(q_lso_pp_w_vf(1), buf(:,:,:,1), mc, nc, pc)
+        write (fname, '(A,I0,A)') 'lso_mask_', t_step, '.dat'
+        call s_write_lso_pp_coarse_file(buf, 1, fname, nloc, nglb, sc)
+
+        if (lso_stat_wrt .and. n_lso_stat > 0) then
+            do i = 1, n_lso_stat
+                call s_lso_pp_decimate(q_lso_pp_stat_vf(i), buf(:,:,:,i), mc, nc, pc)
+            end do
+            write (fname, '(A,I0,A)') 'lso_stat_', t_step, '.dat'
+            call s_write_lso_pp_coarse_file(buf, n_lso_stat, fname, nloc, nglb, sc)
+        end if
+
+        deallocate (buf)
+
+        call s_write_lso_pp_coarse_grid(x_cb(-1:m), 1, 'lso_x_cb.dat', nloc, sc)
+        if (n > 0) call s_write_lso_pp_coarse_grid(y_cb(-1:n), 2, 'lso_y_cb.dat', nloc, sc)
+        if (p > 0) call s_write_lso_pp_coarse_grid(z_cb(-1:p), 3, 'lso_z_cb.dat', nloc, sc)
+
+        if (proc_rank == 0) print '(A,I0,A,3(I0,1X),A)', 'LSO pyramid stage 1: wrote step ', t_step, ' on the coarse grid ', &
+            & nglb(1) + 1, nglb(2) + 1, nglb(3) + 1, '(lso_ restart files)'
+#endif
+
+    end subroutine s_write_lso_pp_pyramid_files
+
+    !> Trilinear sample of the interior of src at the coarse-cell centres (j_c + 1/2) F - 1/2 of the local block (F =
+    !! lso_down_sample_factor, local blocks divisible by F); only interior cells are read.
+    subroutine s_lso_pp_decimate(src, dst, mc, nc, pc)
+
+        type(scalar_field), intent(in) :: src
+        integer, intent(in)            :: mc, nc, pc
+        real(stp), intent(out)         :: dst(0:mc,0:nc,0:pc)
+        integer                        :: j, k, l, j0, j1, k0, k1, l0, l1
+        real(wp)                       :: wj, wk, wl
+
+        do l = 0, pc
+            call s_lso_pp_sample_pos(l, p, l0, l1, wl)
+            do k = 0, nc
+                call s_lso_pp_sample_pos(k, n, k0, k1, wk)
+                do j = 0, mc
+                    call s_lso_pp_sample_pos(j, m, j0, j1, wj)
+                    dst(j, k, l) = real((1._wp - wj)*(1._wp - wk)*(1._wp - wl)*real(src%sf(j0, k0, l0), &
+                        & wp) + wj*(1._wp - wk)*(1._wp - wl)*real(src%sf(j1, k0, l0), &
+                        & wp) + (1._wp - wj)*wk*(1._wp - wl)*real(src%sf(j0, k1, l0), wp) + wj*wk*(1._wp - wl)*real(src%sf(j1, &
+                        & k1, l0), wp) + (1._wp - wj)*(1._wp - wk)*wl*real(src%sf(j0, k0, l1), &
+                        & wp) + wj*(1._wp - wk)*wl*real(src%sf(j1, k0, l1), wp) + (1._wp - wj)*wk*wl*real(src%sf(j0, k1, l1), &
+                        & wp) + wj*wk*wl*real(src%sf(j1, k1, l1), wp), stp)
+                end do
+            end do
+        end do
+
+    end subroutine s_lso_pp_decimate
+
+    !> Fine-grid bracket (i0, i1) and weight of coarse index ic along a direction with nfine + 1 local cells (0 = absent).
+    subroutine s_lso_pp_sample_pos(ic, nfine, i0, i1, wt)
+
+        integer, intent(in)   :: ic, nfine
+        integer, intent(out)  :: i0, i1
+        real(wp), intent(out) :: wt
+        real(wp)              :: pos
+
+        if (nfine == 0) then
+            i0 = 0; i1 = 0; wt = 0._wp
+            return
+        end if
+        pos = (real(ic, wp) + 0.5_wp)*real(lso_down_sample_factor, wp) - 0.5_wp
+        i0 = floor(pos)
+        i1 = min(i0 + 1, nfine)
+        wt = pos - real(i0, wp)
+
+    end subroutine s_lso_pp_sample_pos
+
+#ifdef MFC_MPI
+    !> Write nv coarse fields buf(:,:,:,1:nv) back to back to restart_data/<fname> in the global MPI-IO layout of the simulation's
+    !! lso_ files (one Fortran-ordered global block per field).
+    impure subroutine s_write_lso_pp_coarse_file(buf, nv, fname, nloc, nglb, sc)
+
+        real(stp), intent(in)                :: buf(0:,0:,0:,1:)
+        integer, intent(in)                  :: nv
+        character(LEN=*), intent(in)         :: fname
+        integer, intent(in)                  :: nloc(3), nglb(3), sc(3)
+        integer                              :: ifile, ierr, i, mpi_view, data_size
+        integer, dimension(MPI_STATUS_SIZE)  :: status
+        integer, dimension(num_dims)         :: sizes_glb, sizes_loc, start_loc
+        integer(kind=MPI_OFFSET_KIND)        :: disp, blk
+        character(LEN=path_len + 2*name_len) :: file_loc
+        logical                              :: file_exist
+
+        sizes_glb = nglb(1:num_dims) + 1
+        sizes_loc = nloc(1:num_dims) + 1
+        start_loc = sc(1:num_dims)
+        data_size = product(nloc + 1)
+        blk = int(storage_size(0._stp)/8, MPI_OFFSET_KIND)
+        do i = 1, 3
+            blk = blk*int(nglb(i) + 1, MPI_OFFSET_KIND)
+        end do
+
+        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(fname)
+        inquire (FILE=trim(file_loc), EXIST=file_exist)
+        if (file_exist .and. proc_rank == 0) call MPI_FILE_DELETE(file_loc, mpi_info_int, ierr)
+        call s_mpi_barrier()
+        call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+        call MPI_TYPE_CREATE_SUBARRAY(num_dims, sizes_glb, sizes_loc, start_loc, MPI_ORDER_FORTRAN, mpi_p, mpi_view, ierr)
+        call MPI_TYPE_COMMIT(mpi_view, ierr)
+        do i = 1, nv
+            disp = blk*int(i - 1, MPI_OFFSET_KIND)
+            call MPI_FILE_SET_VIEW(ifile, disp, mpi_p, mpi_view, 'native', mpi_info_int, ierr)
+            call MPI_FILE_WRITE_ALL(ifile, buf(:,:,:,i), data_size*mpi_io_type, mpi_io_p, status, ierr)
+        end do
+        call MPI_TYPE_FREE(mpi_view, ierr)
+        call MPI_FILE_CLOSE(ifile, ierr)
+
+    end subroutine s_write_lso_pp_coarse_file
+
+    !> Write the coarse cell boundaries cb_c(-1:Nc) of direction dir to restart_data/<fname>: with blocks divisible by F, coarse
+    !! boundary J is fine boundary F (J + 1) - 1, so each rank on the first row of the other directions writes its own segment.
+    impure subroutine s_write_lso_pp_coarse_grid(cb, dir, fname, nloc, sc)
+
+        real(wp), intent(in)                 :: cb(-1:)
+        integer, intent(in)                  :: dir
+        character(LEN=*), intent(in)         :: fname
+        integer, intent(in)                  :: nloc(3), sc(3)
+        integer                              :: ifile, ierr, jc, i0, nw
+        integer, dimension(MPI_STATUS_SIZE)  :: status
+        integer(kind=MPI_OFFSET_KIND)        :: disp
+        real(wp), allocatable                :: seg(:)
+        character(LEN=path_len + 2*name_len) :: file_loc
+        logical                              :: file_exist, writer
+
+        writer = .true.
+        do jc = 1, num_dims
+            if (jc /= dir .and. sc(jc) /= 0) writer = .false.
+        end do
+
+        file_loc = trim(case_dir) // '/restart_data' // trim(mpiiofs) // trim(fname)
+        inquire (FILE=trim(file_loc), EXIST=file_exist)
+        if (file_exist .and. proc_rank == 0) call MPI_FILE_DELETE(file_loc, mpi_info_int, ierr)
+        call s_mpi_barrier()
+        call MPI_FILE_OPEN(MPI_COMM_WORLD, file_loc, ior(MPI_MODE_WRONLY, MPI_MODE_CREATE), mpi_info_int, ifile, ierr)
+        if (writer) then
+            ! entries cb_c(-1:Nc) sit at file positions 0:Nc+1; the rank at the domain start also writes cb_c(-1)
+            i0 = merge(-1, 0, sc(dir) == 0)
+            nw = nloc(dir) - i0 + 1
+            allocate (seg(nw))
+            do jc = i0, nloc(dir)
+                seg(jc - i0 + 1) = cb(lso_down_sample_factor*(jc + 1) - 1)
+            end do
+            disp = int(sc(dir) + i0 + 1, MPI_OFFSET_KIND)*int(storage_size(0._wp)/8, MPI_OFFSET_KIND)
+            call MPI_FILE_WRITE_AT(ifile, disp, seg, nw, mpi_p, status, ierr)
+            deallocate (seg)
+        end if
+        call MPI_FILE_CLOSE(ifile, ierr)
+
+    end subroutine s_write_lso_pp_coarse_grid
+#endif
 
     !> Number of closure output fields for the current dimensionality: R_sg (nt) | Q_T (nd) | E_ku (nd) | W_tau_u (nd) | R_mu_sg
     !! (nt) | R_lam_sg (nd) | T_tilde (1) | u_favre (nd), with nt = 1/3/6 symmetric tensor components.

@@ -278,6 +278,7 @@ DESCRIPTIONS = {
     "lso_pp_filter": "Apply an additional LSO filter pass in post_process before writing output, to the in-situ filtered data (lso_filter_wrt=True) or to the original data (lso_filter_wrt=False)",
     "lso_filter_sigma_in": "Gaussian sigma (physical units) of the filter already applied to the input data; toolchain-only input used to size the post_process pass",
     "lso_filter_sigma_target": "Target Gaussian sigma (physical units) for the post_process filter; toolchain-only input, must be greater than lso_filter_sigma_in",
+    "lso_pp_pyramid_wrt": "Pyramid stage 1 in post_process: filter the original data, decimate by lso_down_sample_factor, and write lso-prefixed restart files for a second, widening run",
     "lso_closure_wrt": "Write Euler-Lagrange closure fields (R_sg, Q_T, E_ku, W_tau_u, R_mu_sg, R_lam_sg, T_tilde, u_favre) computed from the LSO stat data to silo_hdf5_lso_closure/",
     "lso_pp2_n_passes_x": "Number of stage-2 post-process filter passes in x (derived; > 0 when a wide target is split across two cascades)",
     "lso_pp2_n_passes_y": "Number of stage-2 post-process filter passes in y (derived; > 0 when a wide target is split across two cascades)",
