@@ -233,9 +233,10 @@ contains
     !> Euler-Lagrange closure fields from the LSO stat products, with F[.] the phase-weighted filter, rho_b = F[rho], u~ = F[rho
     !! u]/rho_b and T~ from F[rho T] = (F[E] - F[rho|u|^2]/2)/Cv, F[E] = E_lso*w: R_sg,ij = F[rho u_i u_j] - F[rho u_i] F[rho
     !! u_j]/rho_b Q_T,i = gamma Cv (F[rho u_i T] - T~ F[rho u_i]) E_ku,i = (F[rho u_i |u|^2] - F[rho u_i] F[rho |u|^2]/rho_b)/2
-    !! W_tau_u,i = (F[rho (tau.u)_i] - (tau_b . F[rho u])_i)/rho_b R_mu_sg = tau_b - mu [grad(u~) + grad(u~)^T - (2/3) div(u~) I]
-    !! R_lam_sg = q_b + lambda grad(T~), with the intensive averages tau_b = F[g tau]/w and q_b = F[g q]/w. Gradients are centred
-    !! differences on the output grid with ghost-refreshed Favre fields; layout per f_lso_n_closure().
+    !! W_tau_u,i = (F[rho (tau.u)_i] - (tau_b . F[rho u])_i)/rho_b R_mu_sg = tau_b - mu(T~) [grad(u~) + grad(u~)^T - (2/3) div(u~)
+    !! I] R_lam_sg = q_b + lambda(T~) grad(T~), with the intensive averages tau_b = F[g tau]/w and q_b = F[g q]/w, and mu, lambda
+    !! from the lso_mu_T_exp power law at T~. Gradients are centred differences on the output grid with ghost-refreshed Favre
+    !! fields; layout per f_lso_n_closure().
     impure subroutine s_compute_lso_closure_fields(q_stat_vf, q_cons_vf, w_vf, q_cls_vf)
 
         type(scalar_field), intent(in)    :: q_stat_vf(:), q_cons_vf(:), w_vf(1:1)
@@ -244,7 +245,7 @@ contains
         integer                           :: nd, nt, i, c, j, k, l, a, b
         integer                           :: ti(6), tj(6)
         integer                           :: i_rsg, i_qt, i_eku, i_wtu, i_rmu, i_rlam, i_tt, i_uf
-        real(wp)                          :: Cv, gcv, rho_b, F_E, wloc, dsp(3)
+        real(wp)                          :: Cv, gcv, rho_b, F_E, wloc, dsp(3), fprop
         real(wp)                          :: rhou(3), tdotru(3), dudx(3, 3), dT(3), div_u, tau_res, tb(3, 3)
 
         nd = num_dims
@@ -323,6 +324,9 @@ contains
                     do a = 1, nd
                         div_u = div_u + dudx(a, a)
                     end do
+                    ! mu(T~), lambda(T~): power law at the Favre temperature (1 when lso_mu_T_exp = 0)
+                    fprop = 1._wp
+                    if (lso_mu_T_exp > 0._wp) fprop = (max(real(uT_vf(nd + 1)%sf(j, k, l), wp), sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
 
                     ! R_sg
                     do c = 1, nt
@@ -347,14 +351,14 @@ contains
                     end do
                     ! R_mu_sg (filtered minus resolved, same tau convention as the solver)
                     do c = 1, nt
-                        tau_res = lso_mu*(dudx(ti(c), tj(c)) + dudx(tj(c), ti(c)))
-                        if (ti(c) == tj(c)) tau_res = tau_res - (2._wp/3._wp)*lso_mu*div_u
+                        tau_res = fprop*lso_mu*(dudx(ti(c), tj(c)) + dudx(tj(c), ti(c)))
+                        if (ti(c) == tj(c)) tau_res = tau_res - (2._wp/3._wp)*fprop*lso_mu*div_u
                         q_cls_vf(i_rmu + c)%sf(j, k, l) = real(tb(ti(c), tj(c)) - tau_res, stp)
                     end do
                     ! R_lam_sg (stored q = -lambda grad T; resolved uses the same sign)
                     do a = 1, nd
                         q_cls_vf(i_rlam + a)%sf(j, k, l) = real(real(q_stat_vf(lso_stat_q_beg + a - 1)%sf(j, k, l), &
-                                 & wp)/wloc - (-lso_conductivity*dT(a)), stp)
+                                 & wp)/wloc - (-fprop*lso_conductivity*dT(a)), stp)
                     end do
                     ! T_tilde, u_favre
                     q_cls_vf(i_tt + 1)%sf(j, k, l) = uT_vf(nd + 1)%sf(j, k, l)
@@ -487,6 +491,7 @@ contains
         real(wp) :: div_u
         real(wp) :: tau11, tau12, tau13, tau22, tau23, tau33
         real(wp) :: q1, q2, q3
+        real(wp) :: fprop, mu_loc, k_loc
 
         ! Pass 1: algebraic products. gas_mask = 1 everywhere (no IB).
 
@@ -584,10 +589,17 @@ contains
                     du1dx = (u1_jp - u1_jm)/ddx
                     dTdx = (T_jp - T_jm)/ddx
 
-                    tau11 = lso_mu*(2._wp*du1dx)
-                    q1 = -lso_conductivity*dTdx
-
                     u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, 0, 0), wp)/rho_loc
+                    ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                    T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, 0, 0), wp) - 0.5_wp*(u1**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                    fprop = 1._wp
+                    if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                    mu_loc = fprop*lso_mu
+                    k_loc = fprop*lso_conductivity
+
+                    ! 1D: 2 du/dx - (2/3) div u = (4/3) du/dx, the same Stokes form as 2D/3D and the closure
+                    tau11 = mu_loc*(4._wp/3._wp)*du1dx
+                    q1 = -k_loc*dTdx
 
                     q_lso_pp_stat_vf(lso_stat_tau_beg)%sf(j, 0, 0) = real(tau11, stp)
                     q_lso_pp_stat_vf(lso_stat_q_beg)%sf(j, 0, 0) = real(q1, stp)
@@ -633,15 +645,22 @@ contains
                         dTdx = (T_jp - T_jm)/ddx
                         dTdy = (T_kp - T_km)/ddy
 
-                        div_u = du1dx + du2dy
-                        tau11 = lso_mu*(2._wp*du1dx - (2._wp/3._wp)*div_u)
-                        tau12 = lso_mu*(du1dy + du2dx)
-                        tau22 = lso_mu*(2._wp*du2dy - (2._wp/3._wp)*div_u)
-                        q1 = -lso_conductivity*dTdx
-                        q2 = -lso_conductivity*dTdy
-
                         u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, k, 0), wp)/rho_loc
                         u2 = real(q_cons_vf(eqn_idx%mom%beg + 1)%sf(j, k, 0), wp)/rho_loc
+                        ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                        T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, k, 0), &
+                                 & wp) - 0.5_wp*(u1**2 + u2**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                        fprop = 1._wp
+                        if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                        mu_loc = fprop*lso_mu
+                        k_loc = fprop*lso_conductivity
+
+                        div_u = du1dx + du2dy
+                        tau11 = mu_loc*(2._wp*du1dx - (2._wp/3._wp)*div_u)
+                        tau12 = mu_loc*(du1dy + du2dx)
+                        tau22 = mu_loc*(2._wp*du2dy - (2._wp/3._wp)*div_u)
+                        q1 = -k_loc*dTdx
+                        q2 = -k_loc*dTdy
 
                         q_lso_pp_stat_vf(lso_stat_tau_beg)%sf(j, k, 0) = real(tau11, stp)
                         q_lso_pp_stat_vf(lso_stat_tau_beg + 1)%sf(j, k, 0) = real(tau12, stp)
@@ -718,20 +737,27 @@ contains
                             dTdy = (T_kp - T_km)/ddy
                             dTdz = (T_lp - T_lm)/ddz
 
-                            div_u = du1dx + du2dy + du3dz
-                            tau11 = lso_mu*(2._wp*du1dx - (2._wp/3._wp)*div_u)
-                            tau12 = lso_mu*(du1dy + du2dx)
-                            tau13 = lso_mu*(du1dz + du3dx)
-                            tau22 = lso_mu*(2._wp*du2dy - (2._wp/3._wp)*div_u)
-                            tau23 = lso_mu*(du2dz + du3dy)
-                            tau33 = lso_mu*(2._wp*du3dz - (2._wp/3._wp)*div_u)
-                            q1 = -lso_conductivity*dTdx
-                            q2 = -lso_conductivity*dTdy
-                            q3 = -lso_conductivity*dTdz
-
                             u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, k, l), wp)/rho_loc
                             u2 = real(q_cons_vf(eqn_idx%mom%beg + 1)%sf(j, k, l), wp)/rho_loc
                             u3 = real(q_cons_vf(eqn_idx%mom%beg + 2)%sf(j, k, l), wp)/rho_loc
+                            ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                            T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, k, l), &
+                                     & wp) - 0.5_wp*(u1**2 + u2**2 + u3**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                            fprop = 1._wp
+                            if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                            mu_loc = fprop*lso_mu
+                            k_loc = fprop*lso_conductivity
+
+                            div_u = du1dx + du2dy + du3dz
+                            tau11 = mu_loc*(2._wp*du1dx - (2._wp/3._wp)*div_u)
+                            tau12 = mu_loc*(du1dy + du2dx)
+                            tau13 = mu_loc*(du1dz + du3dx)
+                            tau22 = mu_loc*(2._wp*du2dy - (2._wp/3._wp)*div_u)
+                            tau23 = mu_loc*(du2dz + du3dy)
+                            tau33 = mu_loc*(2._wp*du3dz - (2._wp/3._wp)*div_u)
+                            q1 = -k_loc*dTdx
+                            q2 = -k_loc*dTdy
+                            q3 = -k_loc*dTdz
 
                             q_lso_pp_stat_vf(lso_stat_tau_beg)%sf(j, k, l) = real(tau11, stp)
                             q_lso_pp_stat_vf(lso_stat_tau_beg + 1)%sf(j, k, l) = real(tau12, stp)

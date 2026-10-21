@@ -398,7 +398,10 @@ module m_global_parameters
     real(wp) :: lso_mu
     !> Thermal conductivity [W/(m·K)] for the heat-flux stat pass (q_i, tau*u includes q). 0 (default) = skip heat-flux.
     real(wp) :: lso_conductivity
-    $:GPU_DECLARE(create='[lso_R_gas, lso_mu, lso_conductivity]')
+    !> Power-law exponent n of mu(T) = lso_mu (T/lso_mu_T_ref)^n; the conductivity follows mu (constant Pr). 0 = constant
+    real(wp) :: lso_mu_T_exp
+    real(wp) :: lso_mu_T_ref  !< Reference temperature [K] of the lso_mu_T_exp power law
+    $:GPU_DECLARE(create='[lso_R_gas, lso_mu, lso_conductivity, lso_mu_T_exp, lso_mu_T_ref]')
     integer :: lso_stat_tau_beg, lso_stat_tau_end            !< viscous stress tau_ij (1/3/6 components)
     integer :: lso_stat_q_beg, lso_stat_q_end                !< heat flux q_i (num_dims components)
     integer :: lso_stat_rhotau_u_beg, lso_stat_rhotau_u_end  !< viscous power flux (tau*u)_i (num_dims components)
@@ -725,6 +728,8 @@ contains
         lso_R_gas = 287.0_wp
         lso_mu = 0.0_wp
         lso_conductivity = 0.0_wp
+        lso_mu_T_exp = 0.0_wp
+        lso_mu_T_ref = 0.0_wp
         lso_stat_tau_beg = 0; lso_stat_tau_end = 0
         lso_stat_q_beg = 0; lso_stat_q_end = 0
         lso_stat_rhotau_u_beg = 0; lso_stat_rhotau_u_end = 0

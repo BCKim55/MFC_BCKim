@@ -686,6 +686,8 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `lso_pp_a_z`            | Real    | Post-process per-pass stencil coefficients in z (5 × lso_max_passes) |
 | `lso_mu`                | Real    | Dynamic viscosity [Pa·s] for viscous stress computation in stat fields. Default 0 (inviscid). |
 | `lso_conductivity`      | Real    | Thermal conductivity [W/(m·K)] for heat-flux computation in stat fields. Default 0 (adiabatic). |
+| `lso_mu_T_exp`          | Real    | Power-law exponent n: mu = lso_mu (T/lso_mu_T_ref)^n, conductivity follows mu (constant Pr). Default 0 (constant). |
+| `lso_mu_T_ref`          | Real    | Reference temperature [K] of the lso_mu_T_exp power law. |
 | `sim_data`              | Logical | Write interface and energy data files (post_process) |
 | `integral_wrt`          | Logical | Write integral data |
 | `num_integrals`         | Integer | Number of integral regions |

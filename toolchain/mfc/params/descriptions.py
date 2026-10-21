@@ -293,6 +293,8 @@ DESCRIPTIONS = {
     "lso_pp_a_z": "Post-process per-pass stencil coefficients in z (5 x lso_max_passes, column-major)",
     "lso_mu": "Dynamic viscosity [Pa·s] for viscous stress computation in stat fields. Default 0 (inviscid).",
     "lso_conductivity": "Thermal conductivity [W/(m·K)] for heat-flux computation in stat fields. Default 0 (adiabatic).",
+    "lso_mu_T_exp": "Power-law exponent n of mu(T) = lso_mu (T/lso_mu_T_ref)^n in the stat fields and closures; the conductivity follows mu (constant Pr). Default 0 (constant properties).",
+    "lso_mu_T_ref": "Reference temperature [K] of the lso_mu_T_exp power law (lso_mu and lso_conductivity are the values at this temperature).",
 }
 
 # Patterns for auto-generating descriptions of indexed parameters

@@ -140,7 +140,7 @@ contains
             & 'tau_star', 'cont_damage_s', 'alpha_bar', 'adap_dt_tol', &
             & 'ic_eps', 'ic_beta', 'hyper_cleaning_speed', &
             & 'hyper_cleaning_tau', 'coefficient_of_restitution', 'collision_time', &
-            & 'ib_coefficient_of_friction', 'filter_sigma', 'lso_R_gas', 'lso_mu', 'lso_conductivity' ]
+            & 'ib_coefficient_of_friction', 'filter_sigma', 'lso_R_gas', 'lso_mu', 'lso_conductivity', 'lso_mu_T_exp', 'lso_mu_T_ref' ]
             call MPI_BCAST(${VAR}$, 1, mpi_p, 0, MPI_COMM_WORLD, ierr)
         #:endfor
 

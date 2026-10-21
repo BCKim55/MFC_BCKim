@@ -116,7 +116,7 @@ contains
             & int_comp, ic_eps, ic_beta, nv_uvm_out_of_core, nv_uvm_igr_temps_on_gpu, nv_uvm_pref_gpu, down_sample, fft_wrt, &
             & lso_filter, lso_filter_wrt, filter_sigma, lso_down_sample_factor, lso_n_passes_x, lso_n_passes_y, lso_n_passes_z, &
             & lso_a_x, lso_a_y, lso_a_z, lso_stat_wrt, lso_R_gas, lso_mu, lso_conductivity, lso2_n_passes_x, lso2_n_passes_y, &
-            & lso2_n_passes_z, lso2_a_x, lso2_a_y, lso2_a_z
+            & lso2_n_passes_z, lso2_a_x, lso2_a_y, lso2_a_z, lso_mu_T_exp, lso_mu_T_ref
 
         inquire (FILE=trim(file_path), EXIST=file_exist)
 
@@ -1326,7 +1326,7 @@ contains
         if (lso_filter) then
             $:GPU_UPDATE(device='[lso_filter, lso_n_passes_x, lso_n_passes_y, lso_n_passes_z]')
             $:GPU_UPDATE(device='[lso_a_x, lso_a_y, lso_a_z]')
-            $:GPU_UPDATE(device='[lso_R_gas, lso_mu, lso_conductivity]')
+            $:GPU_UPDATE(device='[lso_R_gas, lso_mu, lso_conductivity, lso_mu_T_exp, lso_mu_T_ref]')
         end if
 
     end subroutine s_initialize_gpu_vars

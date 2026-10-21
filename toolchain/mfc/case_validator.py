@@ -603,6 +603,10 @@ class CaseValidator:
         )
         self.prohibit(not ib and num_ibs > 0, "num_ibs is set, but ib is not enabled")
         self.prohibit(ib_state_wrt and not ib, "ib_state_wrt requires ib to be enabled")
+        self.prohibit(
+            self.get("lso_mu_T_exp", 0) > 0 and self.get("lso_mu_T_ref", 0) <= 0,
+            "lso_mu_T_exp > 0 requires lso_mu_T_ref > 0 (reference temperature of the LSO power-law viscosity)",
+        )
 
     def check_stiffened_eos(self):
         """Checks constraints on stiffened equation of state fluids parameters"""

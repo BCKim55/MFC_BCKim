@@ -21,6 +21,8 @@ contains
     !> Checks compatibility of parameters in the input file. Used by the post_process stage
     impure subroutine s_check_inputs
 
+        @:PROHIBIT(lso_mu_T_exp > 0._wp .and. lso_mu_T_ref <= 0._wp, "lso_mu_T_exp > 0 requires lso_mu_T_ref > 0")
+
     end subroutine s_check_inputs
 
     !> Checks constraints on fft_wrt

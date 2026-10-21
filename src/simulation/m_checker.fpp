@@ -37,6 +37,7 @@ contains
         call s_check_inputs_time_stepping
 
         @:PROHIBIT(ib_state_wrt .and. .not. ib, "ib_state_wrt requires ib to be enabled")
+        @:PROHIBIT(lso_mu_T_exp > 0._wp .and. lso_mu_T_ref <= 0._wp, "lso_mu_T_exp > 0 requires lso_mu_T_ref > 0")
 
     end subroutine s_check_inputs
 

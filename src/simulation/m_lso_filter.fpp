@@ -1046,6 +1046,7 @@ contains
         real(wp) :: div_u
         real(wp) :: tau11, tau12, tau13, tau22, tau23, tau33
         real(wp) :: q1, q2, q3
+        real(wp) :: fprop, mu_loc, k_loc
 
         ! Pass 1: algebraic products.
 
@@ -1182,10 +1183,18 @@ contains
                             du1dx = (u1_jp - u1_jm)/dx
                             dTdx = (T_jp - T_jm)/dx
 
-                            tau11 = lso_mu*(2._wp*du1dx)
-                            q1 = -lso_conductivity*dTdx
-
                             u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, 0, 0), wp)/rho_loc
+                            ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                            T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, 0, 0), &
+                                     & wp) - 0.5_wp*(u1**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                            fprop = 1._wp
+                            if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                            mu_loc = fprop*lso_mu
+                            k_loc = fprop*lso_conductivity
+
+                            ! 1D: 2 du/dx - (2/3) div u = (4/3) du/dx, the same Stokes form as 2D/3D and the closure
+                            tau11 = mu_loc*(4._wp/3._wp)*du1dx
+                            q1 = -k_loc*dTdx
 
                             q_lso_stat_vf(lso_stat_tau_beg)%sf(j, 0, 0) = real(gas_mask*tau11, stp)
                             q_lso_stat_vf(lso_stat_q_beg)%sf(j, 0, 0) = real(gas_mask*q1, stp)
@@ -1237,15 +1246,22 @@ contains
                             dTdx = (T_jp - T_jm)/dx
                             dTdy = (T_kp - T_km)/dy
 
-                            div_u = du1dx + du2dy
-                            tau11 = lso_mu*(2._wp*du1dx - (2._wp/3._wp)*div_u)
-                            tau12 = lso_mu*(du1dy + du2dx)
-                            tau22 = lso_mu*(2._wp*du2dy - (2._wp/3._wp)*div_u)
-                            q1 = -lso_conductivity*dTdx
-                            q2 = -lso_conductivity*dTdy
-
                             u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, k, 0), wp)/rho_loc
                             u2 = real(q_cons_vf(eqn_idx%mom%beg + 1)%sf(j, k, 0), wp)/rho_loc
+                            ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                            T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, k, 0), &
+                                     & wp) - 0.5_wp*(u1**2 + u2**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                            fprop = 1._wp
+                            if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                            mu_loc = fprop*lso_mu
+                            k_loc = fprop*lso_conductivity
+
+                            div_u = du1dx + du2dy
+                            tau11 = mu_loc*(2._wp*du1dx - (2._wp/3._wp)*div_u)
+                            tau12 = mu_loc*(du1dy + du2dx)
+                            tau22 = mu_loc*(2._wp*du2dy - (2._wp/3._wp)*div_u)
+                            q1 = -k_loc*dTdx
+                            q2 = -k_loc*dTdy
 
                             q_lso_stat_vf(lso_stat_tau_beg)%sf(j, k, 0) = real(gas_mask*tau11, stp)
                             q_lso_stat_vf(lso_stat_tau_beg + 1)%sf(j, k, 0) = real(gas_mask*tau12, stp)
@@ -1326,20 +1342,27 @@ contains
                             dTdy = (T_kp - T_km)/dy
                             dTdz = (T_lp - T_lm)/dz
 
-                            div_u = du1dx + du2dy + du3dz
-                            tau11 = lso_mu*(2._wp*du1dx - (2._wp/3._wp)*div_u)
-                            tau12 = lso_mu*(du1dy + du2dx)
-                            tau13 = lso_mu*(du1dz + du3dx)
-                            tau22 = lso_mu*(2._wp*du2dy - (2._wp/3._wp)*div_u)
-                            tau23 = lso_mu*(du2dz + du3dy)
-                            tau33 = lso_mu*(2._wp*du3dz - (2._wp/3._wp)*div_u)
-                            q1 = -lso_conductivity*dTdx
-                            q2 = -lso_conductivity*dTdy
-                            q3 = -lso_conductivity*dTdz
-
                             u1 = real(q_cons_vf(eqn_idx%mom%beg)%sf(j, k, l), wp)/rho_loc
                             u2 = real(q_cons_vf(eqn_idx%mom%beg + 1)%sf(j, k, l), wp)/rho_loc
                             u3 = real(q_cons_vf(eqn_idx%mom%beg + 2)%sf(j, k, l), wp)/rho_loc
+                            ! mu(T), lambda(T) at the cell temperature (power law, constant Pr; 1 when lso_mu_T_exp = 0)
+                            T_loc = (real(q_cons_vf(eqn_idx%E)%sf(j, k, l), &
+                                     & wp) - 0.5_wp*(u1**2 + u2**2 + u3**2)*rho_loc)/(rho_loc*gammas(1)*lso_R_gas)
+                            fprop = 1._wp
+                            if (lso_mu_T_exp > 0._wp) fprop = (max(T_loc, sgm_eps)/lso_mu_T_ref)**lso_mu_T_exp
+                            mu_loc = fprop*lso_mu
+                            k_loc = fprop*lso_conductivity
+
+                            div_u = du1dx + du2dy + du3dz
+                            tau11 = mu_loc*(2._wp*du1dx - (2._wp/3._wp)*div_u)
+                            tau12 = mu_loc*(du1dy + du2dx)
+                            tau13 = mu_loc*(du1dz + du3dx)
+                            tau22 = mu_loc*(2._wp*du2dy - (2._wp/3._wp)*div_u)
+                            tau23 = mu_loc*(du2dz + du3dy)
+                            tau33 = mu_loc*(2._wp*du3dz - (2._wp/3._wp)*div_u)
+                            q1 = -k_loc*dTdx
+                            q2 = -k_loc*dTdy
+                            q3 = -k_loc*dTdz
 
                             q_lso_stat_vf(lso_stat_tau_beg)%sf(j, k, l) = real(gas_mask*tau11, stp)
                             q_lso_stat_vf(lso_stat_tau_beg + 1)%sf(j, k, l) = real(gas_mask*tau12, stp)

@@ -983,6 +983,8 @@ def _load():
     _r("lso_closure_wrt", LOG, {"filter"})
     _r("lso_mu", REAL, {"filter"})
     _r("lso_conductivity", REAL, {"filter"})
+    _r("lso_mu_T_exp", REAL, {"filter"})
+    _r("lso_mu_T_ref", REAL, {"filter"})
     for n in [
         "schlieren_wrt",
         "alpha_rho_wrt",

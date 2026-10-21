@@ -241,6 +241,8 @@ module m_global_parameters
     real(wp) :: lso_R_gas         !< Specific gas constant [J/(kg*K)] for temperature (default 287.0 = air)
     real(wp) :: lso_mu            !< Dynamic viscosity for viscous stat pass (0 = skip)
     real(wp) :: lso_conductivity  !< Thermal conductivity for heat flux stat pass (0 = skip)
+    real(wp) :: lso_mu_T_exp      !< Power-law exponent of mu(T) = lso_mu (T/lso_mu_T_ref)^n, conductivity alike (0 = constant)
+    real(wp) :: lso_mu_T_ref      !< Reference temperature [K] of the lso_mu_T_exp power law
     !> @}
 
     logical :: chem_wrt_Y(1:num_species)
@@ -486,6 +488,8 @@ contains
         lso_R_gas = 287.0_wp
         lso_mu = 0.0_wp
         lso_conductivity = 0.0_wp
+        lso_mu_T_exp = 0.0_wp
+        lso_mu_T_ref = 0.0_wp
         lag_txt_wrt = .false.
         lag_header = .true.
         lag_db_wrt = .false.

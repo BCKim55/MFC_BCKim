@@ -155,7 +155,7 @@ contains
         call MPI_BCAST(schlieren_alpha(1), num_fluids_max, mpi_p, 0, MPI_COMM_WORLD, ierr)
 
         ! LSO pp filter physics scalars
-        #:for VAR in ['lso_R_gas', 'lso_mu', 'lso_conductivity']
+        #:for VAR in ['lso_R_gas', 'lso_mu', 'lso_conductivity', 'lso_mu_T_exp', 'lso_mu_T_ref']
             call MPI_BCAST(${VAR}$, 1, mpi_p, 0, MPI_COMM_WORLD, ierr)
         #:endfor
 
