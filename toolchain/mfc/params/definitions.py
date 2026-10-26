@@ -704,6 +704,8 @@ def _load():
     _r("precision", INT, {"output"})
     _r("format", INT, {"output"})
     _r("ib_force_stride", INT, {"output", "ib"})
+    _r("stats_wrt", LOG, {"output"})
+    _r("t_stats_start", REAL, {"output"})
     for n in ["parallel_io", "file_per_process", "run_time_info", "prim_vars_wrt", "cons_vars_wrt", "fft_wrt", "ib_state_wrt", "ib_force_wrt"]:
         _r(n, LOG, {"output"})
     for n in [
@@ -1362,6 +1364,8 @@ _nv(
     "ib_state_wrt",
     "ib_force_wrt",
     "ib_force_stride",
+    "stats_wrt",
+    "t_stats_start",
     "avg_state",
     "alt_soundspeed",
     "mixture_err",

@@ -2020,11 +2020,16 @@ class CaseValidator:
                 )
 
     def check_probe_output(self):
-        """Checks probe output requirements (simulation)"""
+        """Checks probe and statistics output requirements (simulation)"""
         probe_wrt = self.get("probe_wrt", "F") == "T"
         fd_order = self.get("fd_order")
 
         self.prohibit(probe_wrt and fd_order is None, "fd_order must be specified for probe_wrt")
+
+        stats_wrt = self.get("stats_wrt", "F") == "T"
+        self.prohibit(stats_wrt and self.get("parallel_io", "F") != "T", "stats_wrt requires parallel_io = T")
+        self.prohibit(stats_wrt and self.get("igr", "F") == "T", "stats_wrt does not support IGR")
+        self.prohibit(self.get("t_stats_start", 0.0) < 0.0, "t_stats_start must be non-negative")
 
     # Pre-Process Specific Checks
 

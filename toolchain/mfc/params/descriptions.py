@@ -138,6 +138,8 @@ DESCRIPTIONS = {
     "ib": "Enable immersed boundary method",
     "ib_force_wrt": "Record the immersed-boundary force history to D/ib_forces.dat (default off)",
     "ib_force_stride": "Write the per-step immersed-boundary force record every N steps (default 1)",
+    "stats_wrt": "Accumulate time integrals of rho, p, p^2, u_i, rho u_i, u_i u_j, rho u_i u_j and write them with each save",
+    "t_stats_start": "Simulation time at which the stats_wrt time integrals start (default 0)",
     "num_ibs": "Number of immersed boundary patches",
     "num_stl_models": "Number of STL/OBJ model entries in the stl_models array",
     "num_particle_clouds": "Number of particle bed specifications to generate immersed boundary patches from",

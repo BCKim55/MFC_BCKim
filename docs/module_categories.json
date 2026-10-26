@@ -60,6 +60,7 @@
         "modules": [
             "m_start_up",
             "m_data_output",
+            "m_stats",
             "m_data_input",
             "m_delay_file_access"
         ]

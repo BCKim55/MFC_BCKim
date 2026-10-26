@@ -521,6 +521,8 @@ contains
         ib_state_wrt = .false.
         ib_force_wrt = .false.
         ib_force_stride = 1
+        stats_wrt = .false.
+        t_stats_start = 0._wp
         many_ib_patch_parallelism = .false.
 
         ! Bubble modeling (sim-specific)

@@ -31,6 +31,7 @@ module m_time_steppers
     use m_body_forces
     use m_derived_variables
     use m_viscous, only: f_mu_T
+    use m_stats, only: s_accumulate_stats
     use m_constants, only: model_eqns_6eq, time_stepper_rk1, time_stepper_rk2, time_stepper_rk3
 
     implicit none
@@ -499,6 +500,8 @@ contains
             end if
             call s_compute_rhs(q_cons_ts(1)%vf, q_T_sf, q_prim_vf, bc_type, rhs_vf, pb_ts(1)%sf, rhs_pb, mv_ts(1)%sf, rhs_mv, &
                                & t_step, s)
+
+            if (s == 1 .and. stats_wrt) call s_accumulate_stats(q_prim_vf)
 
             if (s == 1) then
                 if (run_time_info) then

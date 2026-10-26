@@ -775,6 +775,8 @@ To restart the simulation from $k$-th time step, see @ref running "Restarting Ca
 | `ib_force_wrt`          | Logical | Record the immersed-boundary force history to `D/ib_forces.dat` (default off) |
 | `ib_force_stride`       | Integer | Stride, in time steps, of the per-step immersed-boundary force record (default 1) |
 | `ib_state_wrt`          | Logical | Parameter to handle writing IB state on saves and outputting the state as a point mesh to SILO files. |
+| `stats_wrt`             | Logical | Accumulate time integrals of flow moments and write them to `restart_data/stats_<save>.dat` (default off) |
+| `t_stats_start`         | Real    | Simulation time at which the `stats_wrt` integrals start (default 0) |
 | `pi_inf_wrt`            | Logical | Add the liquid stiffness function to the database |
 | `pres_inf_wrt`          | Logical | Add the liquid stiffness to the formatted database	 |
 | `c_wrt`                 | Logical | Add the sound speed to the database	 |
@@ -870,6 +872,8 @@ offset = (row * num_ibs + ib_id - 1) * 353
 Rows count from the first step the run records, not from `t_step`, so row 0 is the first row of the file whether the run starts at step 0 or resumes from a restart. The first recorded step is the first multiple of `ib_force_stride` after `t_step_start`; `t_step_start` itself is skipped, because at that point the force is still the one from before the run began.
 
 Rows are written in global body-id order, so the file is byte-identical however the domain is decomposed, and no merge step is needed after a parallel run.
+
+- `stats_wrt` accumulates, every time step from `t_stats_start` on, the time integrals \f$\int f\,dt\f$ of \f$f = \rho, p, p^2, u_i, \rho u_i, u_i u_j, \rho u_i u_j\f$ (\f$i \le j\f$) in every cell, together with \f$T = \int dt\f$. Each save writes them to `restart_data/stats_<save>.dat`: \f$T\f$, then one global block per moment in that order, \f$x\f$ fastest, in working precision. Dividing by \f$T\f$ gives the time means, from which \f$\langle u_i' u_j' \rangle = \langle u_i u_j \rangle - \langle u_i \rangle \langle u_j \rangle\f$ and the Favre stress \f$\langle \rho u_i'' u_j'' \rangle = \langle \rho u_i u_j \rangle - \langle \rho u_i \rangle \langle \rho u_j \rangle / \langle \rho \rangle\f$ follow. A restart continues the integrals from the file of the save it starts from. Requires `parallel_io`; not available with IGR.
 
 - `output_partial_domain` activates the output of part of the domain specified by `[x,y,z]_output%%beg` and `[x,y,z]_output%%end`.
 This is useful for large domains where only a portion of the domain is of interest.

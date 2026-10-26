@@ -52,6 +52,7 @@ module m_start_up
     use m_body_forces
     use m_sim_helpers
     use m_igr
+    use m_stats, only: s_initialize_stats_module, s_write_stats_file, s_finalize_stats_module
     use m_constants, only: model_eqns_6eq, time_stepper_rk1, time_stepper_rk2, time_stepper_rk3, recon_type_weno, recon_type_muscl
 
     implicit none
@@ -837,6 +838,7 @@ contains
 
         ! Write IB kinematic state for restart
         if (ib) call s_write_ib_state_file(save_count)
+        if (stats_wrt) call s_write_stats_file(save_count)
 
         call nvtxEndRange
         call cpu_time(finish)
@@ -993,6 +995,14 @@ contains
         if (bubbles_lagrange) call s_initialize_bubbles_EL_module(q_cons_ts(1)%vf, bc_type)
 
         if (hypoelasticity) call s_initialize_hypoelastic_module()
+
+        if (stats_wrt) then
+            if (cfl_dt) then
+                call s_initialize_stats_module(n_start)
+            else
+                call s_initialize_stats_module(t_step_start)
+            end if
+        end if
 
     end subroutine s_initialize_modules
 
@@ -1190,6 +1200,7 @@ contains
         if (surface_tension) call s_finalize_surface_tension_module()
         if (bodyForces .or. synthetic_turbulence) call s_finalize_body_forces_module()
         if (ib) call s_finalize_ibm_module()
+        if (stats_wrt) call s_finalize_stats_module()
 
         call s_mpi_finalize()
 
